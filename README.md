@@ -2,6 +2,10 @@
 
 A custom Home Assistant Lovelace card that wraps any other card in a styled tile container with a configurable header. No external dependencies — no card-mod, no button-card required.
 
+<img width="533" height="382" alt="example_2" src="https://github.com/user-attachments/assets/8f607f21-b1ca-41ec-81e6-de4ca253de90" />
+<img width="528" height="290" alt="example_1" src="https://github.com/user-attachments/assets/be9b65c5-60f0-46de-b5c3-3f5d1e03196c" />
+
+
 ---
 
 ## Features
@@ -217,3 +221,5 @@ The card includes a full visual editor accessible via the HA dashboard editor.
 ## License
 
 MIT
+
+<a href="https://buymeacoffee.com/RothMick"><img width="217" height="50" alt="default-orange" src="https://github.com/user-attachments/assets/0da5dedd-5879-4b2a-9131-cd0ebd751547" /></a>
