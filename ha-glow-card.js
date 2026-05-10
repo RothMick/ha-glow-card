@@ -649,7 +649,8 @@ class HaGlowCardEditor extends HTMLElement {
     ], this._subtitleMode(), mode => {
       this._el('sub-tpl-wrap').classList.toggle('hidden', mode !== 'template');
       this._el('sub-color-wrap').classList.toggle('hidden', mode !== 'template');
-      if (mode !== 'template') this._set('header.subtitle_template', null);
+      const h = this._config.header || {};
+      if (mode !== 'template' && h.subtitle_template) this._set('header.subtitle_template', null);
     });
 
     initForm('form-icon-mode', 'icon_mode', 'Icon', [
@@ -660,8 +661,9 @@ class HaGlowCardEditor extends HTMLElement {
       this._el('icon-mdi-wrap').classList.toggle('hidden', mode !== 'mdi');
       this._el('icon-svg-wrap').classList.toggle('hidden', mode !== 'svg');
       this._el('icon-extras').classList.toggle('hidden', mode === 'none');
-      if (mode !== 'mdi') this._set('header.icon', null);
-      if (mode !== 'svg') this._set('header.icon_path', null);
+      const h = this._config.header || {};
+      if (mode !== 'mdi' && h.icon) this._set('header.icon', null);
+      if (mode !== 'svg' && h.icon_path) this._set('header.icon_path', null);
     });
 
     initForm('form-state-mode', 'state_mode', 'Main Value', [
@@ -674,8 +676,12 @@ class HaGlowCardEditor extends HTMLElement {
       this._el('state-entity-hint').classList.toggle('hidden', mode !== 'entity');
       this._el('state-tpl-wrap').classList.toggle('hidden', mode !== 'template');
       this._el('state-color-wrap').classList.toggle('hidden', mode === 'none');
-      if (mode !== 'entity') { this._set('header.state_entity', null); this._set('header.state_unit', null); }
-      if (mode !== 'template') this._set('header.state_template', null);
+      const h = this._config.header || {};
+      if (mode !== 'entity' && (h.state_entity != null || h.state_unit != null)) {
+        this._set('header.state_entity', null);
+        this._set('header.state_unit', null);
+      }
+      if (mode !== 'template' && h.state_template) this._set('header.state_template', null);
     });
 
     initForm('form-border', 'border', 'Border', [
