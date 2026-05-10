@@ -5,6 +5,7 @@ A custom Home Assistant Lovelace card that wraps any other card (event stacks) i
 <img width="511" height="283" alt="example_1 1" src="https://github.com/user-attachments/assets/1d003000-ba9a-4c45-9931-6940a5042f36" />
 <img width="511" height="379" alt="example_2 1" src="https://github.com/user-attachments/assets/2ab3bf22-d695-4dd5-a334-237d86ad6ffb" />
 <img width="511" height="285" alt="example_3 1" src="https://github.com/user-attachments/assets/680d46ac-6dc1-430a-b9b9-0afb3d632525" />
+<img width="511" height="218" alt="example_4 1" src="https://github.com/user-attachments/assets/184e15b4-6f2a-4a6a-9391-5d8d83075c7f" />
 
 ---
 
