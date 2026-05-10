@@ -204,6 +204,9 @@ The card includes a full visual editor accessible via the HA dashboard editor.
 
 ## Changelog
 
+### v1.0.1
+- **Fix** — Editor fields (entity picker, icon picker) no longer disappear immediately after selecting a mode in the visual editor
+
 ### v1.0.0 — Initial public release
 - **Renamed** from `tile-container-card` to `ha-glow-card`
 - **HTML templates** — `state_template` and `subtitle_template` both render HTML; enables conditional colors via Jinja2 inline conditionals

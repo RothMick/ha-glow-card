@@ -1,5 +1,5 @@
 /**
- * ha-glow-card v1.0.0
+ * ha-glow-card v1.0.1
  *
  * Gestaltbarer Kachel-Container für Home Assistant Lovelace.
  * Keine externen Abhängigkeiten (card-mod, button-card, etc.)
@@ -37,6 +37,8 @@ class HaGlowCardEditor extends HTMLElement {
     this._lovelaceCache = null;
     this._cardEditor = null;
     this._activeTab = 'container';
+    this._iconModeOverride = null;
+    this._stateModeOverride = null;
   }
 
   set hass(hass) {
@@ -53,6 +55,10 @@ class HaGlowCardEditor extends HTMLElement {
   setConfig(config) {
     const prevCardType = this._config.card?.type;
     this._config = JSON.parse(JSON.stringify(config));
+
+    const h = config.header || {};
+    if (h.icon || h.icon_path) this._iconModeOverride = null;
+    if (h.state_entity || h.state_template) this._stateModeOverride = null;
 
     // Wenn wir auf dem Embedded-Tab sind und nur die innere Karte geändert wurde,
     // keinen vollen DOM-Rebuild machen (würde den Editor zerstören und Fokus verlieren)
@@ -96,7 +102,7 @@ class HaGlowCardEditor extends HTMLElement {
     const h = this._config.header || {};
     if (h.icon_path) return 'svg';
     if (h.icon) return 'mdi';
-    return 'none';
+    return this._iconModeOverride || 'none';
   }
 
   _subtitleMode() {
@@ -108,7 +114,7 @@ class HaGlowCardEditor extends HTMLElement {
     const h = this._config.header || {};
     if (h.state_template) return 'template';
     if (h.state_entity) return 'entity';
-    return 'none';
+    return this._stateModeOverride || 'none';
   }
 
   _el(id) { return this.shadowRoot.getElementById(id); }
@@ -316,7 +322,7 @@ class HaGlowCardEditor extends HTMLElement {
         <div class="section">Main Value</div>
         <div class="field"><ha-form id="form-state-mode"></ha-form></div>
         <div id="state-entity-wrap" class="field">
-          <ha-entity-picker id="f-state-entity" label="Entity" needs-hass allow-custom-entity></ha-entity-picker>
+          <ha-form id="f-state-entity-form" needs-hass></ha-form>
         </div>
         <div id="state-entity-extra" class="field row2">
           <ha-textfield id="f-state-unit" label="Unit"></ha-textfield>
@@ -579,8 +585,13 @@ class HaGlowCardEditor extends HTMLElement {
       } else if (iconMode === 'svg') {
         this._val('f-icon-path', h.icon_path || '');
       }
-      const ep = this._el('f-state-entity');
-      if (ep) ep.value = h.state_entity || '';
+      const ef = this._el('f-state-entity-form');
+      if (ef) {
+        ef.hass = this._hass;
+        ef.schema = [{ name: 'state_entity', label: 'Entity', selector: { entity: {} } }];
+        ef.data = { state_entity: h.state_entity || null };
+        ef.computeLabel = s => s.label ?? s.name;
+      }
     });
   }
 
@@ -617,7 +628,9 @@ class HaGlowCardEditor extends HTMLElement {
     this._el('f-subtitle-tpl')?.addEventListener('change', e => this._set('header.subtitle_template', e.target.value));
     this._wireColor('f-sub-color', 'header.subtitle_color');
 
-    valEvt('f-state-entity', 'header.state_entity');
+    this._el('f-state-entity-form')?.addEventListener('value-changed', e => {
+      this._set('header.state_entity', e.detail.value?.state_entity || null);
+    });
     chg('f-state-unit', 'header.state_unit');
     chg('f-state-dec', 'header.state_decimals', v => parseInt(v) || 0);
     this._el('f-state-tpl')?.addEventListener('change', e => this._set('header.state_template', e.target.value));
@@ -658,6 +671,7 @@ class HaGlowCardEditor extends HTMLElement {
       { value: 'mdi', label: 'MDI icon' },
       { value: 'svg', label: 'SVG (path)' },
     ], this._iconMode(), mode => {
+      this._iconModeOverride = mode === 'none' ? null : mode;
       this._el('icon-mdi-wrap').classList.toggle('hidden', mode !== 'mdi');
       this._el('icon-svg-wrap').classList.toggle('hidden', mode !== 'svg');
       this._el('icon-extras').classList.toggle('hidden', mode === 'none');
@@ -671,6 +685,7 @@ class HaGlowCardEditor extends HTMLElement {
       { value: 'entity', label: 'Entity' },
       { value: 'template', label: 'Jinja2 template' },
     ], this._stateMode(), mode => {
+      this._stateModeOverride = mode === 'none' ? null : mode;
       this._el('state-entity-wrap').classList.toggle('hidden', mode !== 'entity');
       this._el('state-entity-extra').classList.toggle('hidden', mode !== 'entity');
       this._el('state-entity-hint').classList.toggle('hidden', mode !== 'entity');
@@ -1153,7 +1168,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c HA-GLOW-CARD %c v1.0.0',
+  '%c HA-GLOW-CARD %c v1.0.1',
   'color:#fff;background:#0381f9;font-weight:700;padding:2px 4px;border-radius:3px 0 0 3px;',
   'color:#0381f9;background:#1c1c1c;font-weight:400;padding:2px 4px;border-radius:0 3px 3px 0;border:1px solid #0381f9;'
 );
