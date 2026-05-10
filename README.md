@@ -2,10 +2,9 @@
 
 A custom Home Assistant Lovelace card that wraps any other card (event stacks) in a styled tile container with a configurable header. No external dependencies — no card-mod, no button-card required.
 
-<img width="533" height="382" alt="example_2" src="https://github.com/user-attachments/assets/8f607f21-b1ca-41ec-81e6-de4ca253de90" />
-<img width="528" height="290" alt="example_1" src="https://github.com/user-attachments/assets/be9b65c5-60f0-46de-b5c3-3f5d1e03196c" />
-<img width="518" height="280" alt="example_3" src="https://github.com/user-attachments/assets/ae16ae14-0cbb-493a-86b6-42c627fcea5a" />
-
+<img width="511" height="283" alt="example_1 1" src="https://github.com/user-attachments/assets/1d003000-ba9a-4c45-9931-6940a5042f36" />
+<img width="511" height="379" alt="example_2 1" src="https://github.com/user-attachments/assets/2ab3bf22-d695-4dd5-a334-237d86ad6ffb" />
+<img width="511" height="285" alt="example_3 1" src="https://github.com/user-attachments/assets/680d46ac-6dc1-430a-b9b9-0afb3d632525" />
 
 ---
 
