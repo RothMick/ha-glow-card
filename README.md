@@ -203,6 +203,9 @@ The card includes a full visual editor accessible via the HA dashboard editor.
 
 ## Changelog
 
+### v1.0.2
+- **Fix** — Inner cards of stacked containers (e.g. `vertical-stack`) now keep their own background, border, and border-radius. Previously, ha-glow-card used CSS custom properties to suppress the outer card's frame, but those cascade through shadow DOM into nested cards. Replaced with scoped shadow-DOM style injection that only affects the direct outer card.
+
 ### v1.0.1
 - **Fix** — Editor fields (entity picker, icon picker) no longer disappear immediately after selecting a mode in the visual editor
 

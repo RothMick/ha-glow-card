@@ -1,5 +1,5 @@
 /**
- * ha-glow-card v1.0.1
+ * ha-glow-card v1.0.2
  *
  * Gestaltbarer Kachel-Container für Home Assistant Lovelace.
  * Keine externen Abhängigkeiten (card-mod, button-card, etc.)
@@ -1123,30 +1123,29 @@ class HaGlowCard extends HTMLElement {
       const helpers = await _getHelpers();
       const card = helpers.createCardElement(this._config.card);
 
-      // Innere ha-card-Rahmenstyling deaktivieren — Abstände kommen vom Container
-      card.style.setProperty('--ha-card-background', 'transparent');
-      card.style.setProperty('--ha-card-box-shadow', 'none');
-      card.style.setProperty('--ha-card-border-width', '0');
-      card.style.setProperty('--ha-card-border-radius', '0');
-
       if (this._hass) card.hass = this._hass;
       this._innerCard = card;
       slot.appendChild(card);
 
-      if (this._config.extra_styles) {
-        const css = this._config.extra_styles;
-        const inject = () => {
-          const root = card.shadowRoot;
-          if (root) {
-            const s = document.createElement('style');
-            s.textContent = css;
-            root.appendChild(s);
-          }
-        };
-        // Shadow root may not exist until first render
-        if (card.shadowRoot) inject();
-        else requestAnimationFrame(inject);
-      }
+      const injectStyles = () => {
+        const root = card.shadowRoot;
+        if (!root) return;
+        // Reset outer card visuals via scoped CSS — NOT via CSS variables (those cascade to child cards)
+        if (!root.querySelector('#glow-outer-reset')) {
+          const s = document.createElement('style');
+          s.id = 'glow-outer-reset';
+          s.textContent = 'ha-card{background:transparent!important;box-shadow:none!important;border:none!important;border-radius:0!important;}';
+          root.appendChild(s);
+        }
+        if (this._config.extra_styles && !root.querySelector('#glow-extra-styles')) {
+          const s = document.createElement('style');
+          s.id = 'glow-extra-styles';
+          s.textContent = this._config.extra_styles;
+          root.appendChild(s);
+        }
+      };
+      if (card.shadowRoot) injectStyles();
+      else requestAnimationFrame(injectStyles);
     } catch (err) {
       console.error('ha-glow-card: Innere Kachel konnte nicht erstellt werden', err);
       const errEl = document.createElement('div');
@@ -1168,7 +1167,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c HA-GLOW-CARD %c v1.0.1',
+  '%c HA-GLOW-CARD %c v1.0.2',
   'color:#fff;background:#0381f9;font-weight:700;padding:2px 4px;border-radius:3px 0 0 3px;',
   'color:#0381f9;background:#1c1c1c;font-weight:400;padding:2px 4px;border-radius:0 3px 3px 0;border:1px solid #0381f9;'
 );
