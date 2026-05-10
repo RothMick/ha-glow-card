@@ -202,6 +202,51 @@ The card includes a full visual editor accessible via the HA dashboard editor.
 
 ---
 
+## Using as a pure style wrapper
+
+You can use ha-glow-card purely as a visual container — without any header — to apply the glow background, border, and rounded corners to any existing card. Simply omit the `header` key entirely.
+
+```yaml
+type: custom:ha-glow-card
+accent_color: "3, 129, 249"
+show_border: true
+card:
+  type: custom:mushroom-entity-card
+  entity: sensor.temperature
+```
+
+This is useful when you want a consistent glow look across your dashboard without adding a title or icon on top of an existing card.
+
+### Wrapping a stack of cards
+
+Combine with `vertical-stack` to wrap multiple cards in a single styled tile:
+
+```yaml
+type: custom:ha-glow-card
+accent_color: "80, 200, 120"
+show_border: true
+inner_margin: "0 -15px -15px -15px"
+card:
+  type: vertical-stack
+  cards:
+    - type: custom:mushroom-entity-card
+      entity: sensor.temperature
+    - type: custom:mushroom-entity-card
+      entity: sensor.humidity
+```
+
+> **Note:** When wrapping a `vertical-stack`, set `inner_margin` with negative left/right values (e.g. `"0 -15px -15px -15px"`) so the inner cards stretch flush to the container edges.
+
+### Neutral / greyscale glow
+
+Use a neutral grey accent for cards where color is not meaningful:
+
+```yaml
+accent_color: "150, 150, 150"
+```
+
+---
+
 ## Changelog
 
 ### v1.0.2
