@@ -1,31 +1,31 @@
 /**
  * ha-glow-card v1.0.2
  *
- * Gestaltbarer Kachel-Container für Home Assistant Lovelace.
- * Keine externen Abhängigkeiten (card-mod, button-card, etc.)
+ * Customizable tile container for Home Assistant Lovelace.
+ * No external dependencies (card-mod, button-card, etc.)
  *
- * Config-Schema:
+ * Config schema:
  *   type: custom:ha-glow-card
- *   accent_color: "3, 129, 249"        # RGB-Werte für den Hintergrund-Glow
+ *   accent_color: "3, 129, 249"        # RGB values for the background glow
  *   header:
- *     title: "Verbrauch"               # Pflicht
- *     title_color: ""                  # CSS-Farbe, leer = var(--primary-text-color)
- *     icon: "mdi:lightning-bolt"       # HA MDI-Icon  ─┐ nur eines
- *     icon_path: "/local/..."          # SVG-Pfad      ─┘ verwenden
+ *     title: "Power"                   # required
+ *     title_color: ""                  # CSS color, empty = var(--primary-text-color)
+ *     icon: "mdi:lightning-bolt"       # HA MDI icon  ─┐ use exactly
+ *     icon_path: "/local/..."          # SVG path      ─┘ one of these
  *     icon_size: 40                    # px
- *     icon_color: ""                   # CSS-Farbe
- *     subtitle_template: "..."         # Jinja2-Template, server-seitig ausgewertet
- *     subtitle_color: ""               # CSS-Farbe, leer = var(--secondary-text-color)
+ *     icon_color: ""                   # CSS color
+ *     subtitle_template: "..."         # Jinja2 template, evaluated server-side
+ *     subtitle_color: ""               # CSS color, empty = var(--secondary-text-color)
  *     state_entity: "sensor.abc"
  *     state_unit: "W"
  *     state_decimals: 0
  *     state_color: "#ffffff"
- *   inner_margin: "0 -15px -15px"      # Margin der inneren Kachel
- *   card:                              # Pflicht – beliebige Lovelace-Card-Config
+ *   inner_margin: "0 -15px -15px"      # margin of the embedded card
+ *   card:                              # required — any valid Lovelace card config
  *     type: custom:apexcharts-card
  */
 
-// ─── Visueller Editor ────────────────────────────────────────────────────────
+// ─── Visual Editor ───────────────────────────────────────────────────────────
 
 class HaGlowCardEditor extends HTMLElement {
   constructor() {
@@ -60,8 +60,8 @@ class HaGlowCardEditor extends HTMLElement {
     if (h.icon || h.icon_path) this._iconModeOverride = null;
     if (h.state_entity || h.state_template) this._stateModeOverride = null;
 
-    // Wenn wir auf dem Embedded-Tab sind und nur die innere Karte geändert wurde,
-    // keinen vollen DOM-Rebuild machen (würde den Editor zerstören und Fokus verlieren)
+    // When on the embedded tab and only the inner card changed,
+    // skip a full DOM rebuild (would destroy the editor and lose focus)
     if (this._activeTab === 'embedded' && this._cardEditor && prevCardType === config.card?.type) {
       this._cardEditor.value = config.card || {};
       return;
@@ -136,7 +136,7 @@ class HaGlowCardEditor extends HTMLElement {
     return '#' + [m[1], m[2], m[3]].map(n => parseInt(n).toString(16).padStart(2, '0')).join('');
   }
 
-  /** Akzeptiert Hex (#rrggbb) oder RGB-String (r, g, b) → gibt immer RGB zurück */
+  /** Accepts hex (#rrggbb) or RGB string (r, g, b) → always returns RGB */
   _toRgb(val) {
     const v = val.trim();
     if (v.startsWith('#')) return this._hexToRgb(v);
@@ -144,17 +144,17 @@ class HaGlowCardEditor extends HTMLElement {
     return null;
   }
 
-  /** HTML: Farbpicker-Quadrat + Textfeld. placeholder zeigt den Standardwert an. */
+  /** HTML: color picker square + text field. placeholder shows the default value. */
   _colorFieldHtml(id, label, placeholder = '', hint = '') {
     return `
       <div class="color-field">
-        <input type="color" id="${id}-picker" class="color-square" title="Farbe wählen">
+        <input type="color" id="${id}-picker" class="color-square" title="Pick color">
         <ha-textfield id="${id}" label="${label}" placeholder="${placeholder}" style="flex:1;"></ha-textfield>
       </div>
       ${hint ? `<div class="hint">${hint}</div>` : ''}`;
   }
 
-  /** Farbfeld befüllen. isRgb=true → intern RGB, Nutzer sieht HEX. */
+  /** Populate color field. isRgb=true → stored as RGB, displayed as HEX. */
   _populateColor(id, value, isRgb = false) {
     let hex = null;
     if (isRgb) {
@@ -168,7 +168,7 @@ class HaGlowCardEditor extends HTMLElement {
     if (picker) picker.value = hex || '#ffffff';
   }
 
-  /** Picker + Textfeld verdrahten. isRgb=true → intern RGB, Anzeige HEX. */
+  /** Wire picker + text field. isRgb=true → stored as RGB, displayed as HEX. */
   _wireColor(id, path, isRgb = false) {
     const picker = this._el(`${id}-picker`);
     const field  = this._el(id);
@@ -420,9 +420,9 @@ class HaGlowCardEditor extends HTMLElement {
     if (slot) slot.innerHTML = '';
     embedPicker.innerHTML = '';
 
-    // hui-card-picker ist nur registriert wenn der Stack-Editor oder der
-    // "Kachel hinzufügen"-Dialog in dieser Session schon geöffnet wurde.
-    // Synchron prüfen — kein whenDefined() das ewig hängt.
+    // hui-card-picker is only registered if the stack editor or "add card"
+    // dialog has been opened at least once in this session.
+    // Check synchronously — no whenDefined() that hangs indefinitely.
     if (customElements.get('hui-card-picker')) {
       const picker = document.createElement('hui-card-picker');
       embedPicker.appendChild(picker);
@@ -710,9 +710,9 @@ class HaGlowCardEditor extends HTMLElement {
 
 customElements.define('ha-glow-card-editor', HaGlowCardEditor);
 
-// ─── Karte ───────────────────────────────────────────────────────────────────
+// ─── Card ────────────────────────────────────────────────────────────────────
 
-// loadCardHelpers()-Promise einmalig cachen — wird von allen Instanzen geteilt
+// Cache the loadCardHelpers() promise once — shared across all instances
 let _helpersPromise = null;
 const _getHelpers = () => (_helpersPromise ??= window.loadCardHelpers());
 
@@ -924,7 +924,7 @@ class HaGlowCard extends HTMLElement {
           color: var(--primary-text-color);
         }
 
-        /* ─ Innere Kachel ─ */
+        /* ─ Inner card ─ */
         .inner-card { display: block; }
         .error { color: var(--error-color, red); padding: 8px; font-size: 13px; }
       </style>
@@ -1039,21 +1039,21 @@ class HaGlowCard extends HTMLElement {
     stateEl.style.color = h.state_color || 'var(--primary-text-color)';
   }
 
-  // ── Header-Daten (Entity-Werte) ──────────────────────────────────────────
+  // ── Header data (entity values) ──────────────────────────────────────────
 
   _updateHeader() {
     if (!this._built || !this._config?.header || !this._hass) return;
     const h = this._config.header;
     const { subEl, stateEl } = this._els;
 
-    // Subtitle: subtitle_template → WebSocket-Subscription schreibt direkt
+    // Subtitle: subtitle_template → written directly by WebSocket subscription
     if (h.subtitle_template) {
       subEl.style.color = h.subtitle_color || 'var(--secondary-text-color)';
     } else {
       subEl.textContent = '';
     }
 
-    // State-Wert: state_template → Subscription schreibt direkt; state_entity → hier
+    // State value: state_template → written by subscription; state_entity → resolved here
     if (!h.state_template && h.state_entity) {
       const s = this._hass.states[h.state_entity];
       let text;
@@ -1110,7 +1110,7 @@ class HaGlowCard extends HTMLElement {
     }
   }
 
-  // ── Innere Kachel ────────────────────────────────────────────────────────
+  // ── Inner card ───────────────────────────────────────────────────────────
 
   async _createInnerCard() {
     const slot = this._els?.innerCard ?? this.shadowRoot.querySelector('.inner-card');
@@ -1147,10 +1147,10 @@ class HaGlowCard extends HTMLElement {
       if (card.shadowRoot) injectStyles();
       else requestAnimationFrame(injectStyles);
     } catch (err) {
-      console.error('ha-glow-card: Innere Kachel konnte nicht erstellt werden', err);
+      console.error('ha-glow-card: Failed to create inner card', err);
       const errEl = document.createElement('div');
       errEl.className = 'error';
-      errEl.textContent = `Fehler: ${err.message}`;
+      errEl.textContent = `Error: ${err.message}`;
       slot.appendChild(errEl);
     }
   }
