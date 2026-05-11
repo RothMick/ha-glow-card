@@ -256,7 +256,6 @@ accent_color: "150, 150, 150"
 - **Fix** — Editor fields (entity picker, icon picker) no longer disappear immediately after selecting a mode in the visual editor
 
 ### v1.0.0 — Initial public release
-- **Renamed** from `tile-container-card` to `ha-glow-card`
 - **HTML templates** — `state_template` and `subtitle_template` both render HTML; enables conditional colors via Jinja2 inline conditionals
 - **Glow border** — hidden feature `border_glow: true` adds an accent-colored gradient border matching the background glow position
 - **CSS injection** — `extra_styles` injects custom CSS into the inner card's shadow DOM (replaces card_mod for common fixes)
