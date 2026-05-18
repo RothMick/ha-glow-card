@@ -1,4 +1,4 @@
-# HA Glow Card
+# Glow Card
 
 A custom Home Assistant Lovelace card that wraps any other card (event stacks) in a styled tile container with a configurable header. No external dependencies — no card-mod, no button-card required.
 
