@@ -249,6 +249,9 @@ accent_color: "150, 150, 150"
 
 ## Changelog
 
+### v1.0.4
+- **Fix** — Editor no longer scrolls back to the top when a setting is changed. The left panel now preserves scroll position while the preview updates independently.
+
 ### v1.0.3
 - **Fix** — Visual editor now works correctly on iOS and Safari. All inputs replaced with native `ha-form` elements; text field changes are buffered and only saved on focus-out so WebKit does not re-render the editor on every keystroke
 - **Improvement** — Color fields now show proper labels (e.g. "Title color", "Glow color") instead of raw key names

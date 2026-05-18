@@ -1,5 +1,5 @@
 /**
- * ha-glow-card v1.0.3
+ * ha-glow-card v1.0.4
  * Editor rebuilt closer to energy-flow-card style:
  * - all inputs via ha-form
  * - fewer direct ha-textfield / picker elements
@@ -52,8 +52,24 @@ class HaGlowCardEditor extends HTMLElement {
 
     if (!this._mainEditing) {
       this._cardEditor = null;
+      const scroller = this._findScroller();
+      const savedScroll = scroller ? scroller.scrollTop : null;
       this._render();
+      if (scroller != null && savedScroll != null) {
+        requestAnimationFrame(() => { scroller.scrollTop = savedScroll; });
+      }
     }
+  }
+
+  _findScroller() {
+    let node = this;
+    while (node) {
+      const next = node.parentElement || (node.getRootNode && node.getRootNode().host);
+      if (!next) return null;
+      if (next.scrollHeight > next.clientHeight + 1) return next;
+      node = next;
+    }
+    return null;
   }
 
   disconnectedCallback() {
@@ -352,14 +368,34 @@ class HaGlowCardEditor extends HTMLElement {
         gap:8px;
         align-items:center;
       }
-      .color-square {
+      .color-swatch {
         width:36px;
         height:36px;
         flex-shrink:0;
         border-radius:4px;
         border:1px solid var(--divider-color, rgba(0,0,0,0.12));
         cursor:pointer;
+        position:relative;
+        overflow:hidden;
+      }
+      .color-swatch.no-color {
+        background:repeating-linear-gradient(
+          -45deg,
+          rgba(120,120,120,0.5) 0px,
+          rgba(120,120,120,0.5) 4px,
+          transparent 4px,
+          transparent 8px
+        );
+      }
+      .color-hidden-input {
+        position:absolute;
+        inset:0;
+        opacity:0;
+        cursor:pointer;
+        width:100%;
+        height:100%;
         padding:0;
+        border:none;
       }
       hui-card-element-editor, hui-card-picker { display:block; }
       .embed-header {
@@ -407,8 +443,10 @@ class HaGlowCardEditor extends HTMLElement {
 
   _colorFieldHtml(id, label, placeholder = '', isRgb = false) {
     return `
-      <div class="color-field" data-rgb="${isRgb ? '1' : '0'}">
-        <input type="color" id="${id}-picker" class="color-square" title="Pick color">
+      <div class="color-field">
+        <div class="color-swatch no-color" id="${id}-swatch" title="Pick color">
+          <input type="color" id="${id}-picker" class="color-hidden-input">
+        </div>
         <ha-form id="form-color-${id}"></ha-form>
       </div>
       <div class="hint">Empty: uses ${placeholder || 'default value'}</div>
@@ -636,12 +674,16 @@ class HaGlowCardEditor extends HTMLElement {
 
     ['title_color', 'subtitle_color', 'icon_color', 'state_color'].forEach(id => {
       const val = h[id] || '';
+      const hex = /^#[0-9a-fA-F]{6}$/.test(val) ? val : '';
       const picker = this._el(`${id}-picker`);
-      if (picker) picker.value = /^#[0-9a-fA-F]{6}$/.test(val) ? val : '#ffffff';
+      if (picker) picker.value = hex || '#ffffff';
+      this._updateColorSwatch(id, hex);
     });
 
+    const accentHex = this._rgbToHex(this._config.accent_color || '3, 129, 249') || '#0381f9';
     const accentPicker = this._el('accent_color-picker');
-    if (accentPicker) accentPicker.value = this._rgbToHex(this._config.accent_color || '3, 129, 249') || '#0381f9';
+    if (accentPicker) accentPicker.value = accentHex;
+    this._updateColorSwatch('accent_color', accentHex);
   }
 
   _wireNativeFields() {
@@ -658,6 +700,18 @@ class HaGlowCardEditor extends HTMLElement {
     this._wireColorPicker('accent_color', true, val => this._mergeRoot({ accent_color:val }, true));
   }
 
+  _updateColorSwatch(id, hex) {
+    const swatch = this._el(`${id}-swatch`);
+    if (!swatch) return;
+    if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+      swatch.style.background = hex;
+      swatch.classList.remove('no-color');
+    } else {
+      swatch.style.background = '';
+      swatch.classList.add('no-color');
+    }
+  }
+
   _wireColorPicker(id, isRgb, onChange) {
     const picker = this._el(`${id}-picker`);
     picker?.addEventListener('input', e => {
@@ -665,6 +719,7 @@ class HaGlowCardEditor extends HTMLElement {
       const store = isRgb ? this._hexToRgb(hex) : hex;
       const form = this._el(`form-color-${id}`);
       if (form) form.data = { [id]:hex };
+      this._updateColorSwatch(id, hex);
       onChange(store);
     });
   }
@@ -674,6 +729,7 @@ class HaGlowCardEditor extends HTMLElement {
     if (!picker) return;
     const hex = isRgb ? this._rgbToHex(raw) : raw;
     if (/^#[0-9a-fA-F]{6}$/.test(hex)) picker.value = hex;
+    this._updateColorSwatch(id, hex || '');
   }
 
   _wireTabs() {
@@ -1355,7 +1411,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c HA-GLOW-CARD %c v1.0.3',
+  '%c HA-GLOW-CARD %c v1.0.4',
   'color:#fff;background:#0381f9;font-weight:700;padding:2px 4px;border-radius:3px 0 0 3px;',
   'color:#0381f9;background:#1c1c1c;font-weight:400;padding:2px 4px;border-radius:0 3px 3px 0;border:1px solid #0381f9;'
 );
