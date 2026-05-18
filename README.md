@@ -91,7 +91,8 @@ card:
 | `header` | object | | Header configuration (see below). Omit the entire key to hide the header |
 | `card` | object | **required** | Any valid Lovelace card configuration |
 | `accent_color` | string | `"3, 129, 249"` | RGB values for the background glow (e.g. `"3, 129, 249"` for blue). Must be in `r, g, b` format — interpolated into `rgba()` for the gradient |
-| `show_border` | boolean | `true` | Show or hide the tile border |
+| `show_border` | boolean | `true` | Set to `false` to hide the tile border entirely |
+| `border_glow` | boolean | `false` | Set to `true` for an accent-colored gradient border that matches the background glow. Overrides `show_border` |
 | `inner_margin` | string | `"0 -15px -15px"` | CSS margin applied to the embedded card — use negative values to stretch it to the container edges |
 
 ### `header` options
@@ -127,6 +128,27 @@ icon: mdi:solar-power
 ```yaml
 icon_path: /local/custom_icons/plug.svg
 icon_color: "#4A90E2"
+```
+
+---
+
+## Border modes
+
+Three border states — configure via YAML or the visual editor's **Border** selector:
+
+**Normal border** (default) — standard `--divider-color` border:
+```yaml
+# no border keys needed — this is the default
+```
+
+**No border:**
+```yaml
+show_border: false
+```
+
+**Glow border** — accent-colored gradient border that follows the background glow:
+```yaml
+border_glow: true
 ```
 
 ---
