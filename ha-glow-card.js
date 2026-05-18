@@ -1,31 +1,10 @@
 /**
- * ha-glow-card v1.0.2
- *
- * Customizable tile container for Home Assistant Lovelace.
- * No external dependencies (card-mod, button-card, etc.)
- *
- * Config schema:
- *   type: custom:ha-glow-card
- *   accent_color: "3, 129, 249"        # RGB values for the background glow
- *   header:
- *     title: "Power"                   # required
- *     title_color: ""                  # CSS color, empty = var(--primary-text-color)
- *     icon: "mdi:lightning-bolt"       # HA MDI icon  ─┐ use exactly
- *     icon_path: "/local/..."          # SVG path      ─┘ one of these
- *     icon_size: 40                    # px
- *     icon_color: ""                   # CSS color
- *     subtitle_template: "..."         # Jinja2 template, evaluated server-side
- *     subtitle_color: ""               # CSS color, empty = var(--secondary-text-color)
- *     state_entity: "sensor.abc"
- *     state_unit: "W"
- *     state_decimals: 0
- *     state_color: "#ffffff"
- *   inner_margin: "0 -15px -15px"      # margin of the embedded card
- *   card:                              # required — any valid Lovelace card config
- *     type: custom:apexcharts-card
+ * ha-glow-card v1.0.3
+ * Editor rebuilt closer to energy-flow-card style:
+ * - all inputs via ha-form
+ * - fewer direct ha-textfield / picker elements
+ * - text changes are buffered so iOS/WebKit does not re-render on every keystroke
  */
-
-// ─── Visual Editor ───────────────────────────────────────────────────────────
 
 class HaGlowCardEditor extends HTMLElement {
   constructor() {
@@ -39,11 +18,13 @@ class HaGlowCardEditor extends HTMLElement {
     this._activeTab = 'container';
     this._iconModeOverride = null;
     this._stateModeOverride = null;
+    this._mainEditing = false;
+    this._pending = null;
   }
 
   set hass(hass) {
     this._hass = hass;
-    this.shadowRoot.querySelectorAll('[needs-hass]').forEach(el => { el.hass = hass; });
+    this.shadowRoot.querySelectorAll('ha-form').forEach(f => { f.hass = hass; });
     if (this._cardEditor) this._cardEditor.hass = hass;
   }
 
@@ -54,26 +35,33 @@ class HaGlowCardEditor extends HTMLElement {
 
   setConfig(config) {
     const prevCardType = this._config.card?.type;
-    this._config = JSON.parse(JSON.stringify(config));
+    this._config = JSON.parse(JSON.stringify(config || {}));
 
-    const h = config.header || {};
+    const h = this._config.header || {};
     if (h.icon || h.icon_path) this._iconModeOverride = null;
     if (h.state_entity || h.state_template) this._stateModeOverride = null;
 
-    // When on the embedded tab and only the inner card changed,
-    // skip a full DOM rebuild (would destroy the editor and lose focus)
-    if (this._activeTab === 'embedded' && this._cardEditor && prevCardType === config.card?.type) {
-      this._cardEditor.value = config.card || {};
+    if (
+      this._activeTab === 'embedded' &&
+      this._cardEditor &&
+      prevCardType === this._config.card?.type
+    ) {
+      this._cardEditor.value = this._config.card || {};
       return;
     }
 
-    this._cardEditor = null;
-    this._render();
+    if (!this._mainEditing) {
+      this._cardEditor = null;
+      this._render();
+    }
   }
 
-  // ── Helpers ──────────────────────────────────────────────────────────────
+  disconnectedCallback() {
+    this._flushPending();
+  }
 
-  _fire() {
+  _fire(cfg = this._config) {
+    this._config = JSON.parse(JSON.stringify(cfg));
     this.dispatchEvent(new CustomEvent('config-changed', {
       detail: { config: this._config },
       bubbles: true,
@@ -81,21 +69,79 @@ class HaGlowCardEditor extends HTMLElement {
     }));
   }
 
-  /** Deep-set a dot-path value; deletes key when value is '' / null / undefined. */
-  _set(path, value) {
+  _flushPending() {
+    if (!this._pending) return;
+    const cfg = this._pending;
+    this._pending = null;
+    this._mainEditing = true;
+    this._fire(cfg);
+    this._mainEditing = false;
+  }
+
+  _set(path, value, flush = true) {
+    const cfg = JSON.parse(JSON.stringify(this._config));
     const parts = path.split('.');
-    let obj = this._config;
+    let obj = cfg;
+
     for (let i = 0; i < parts.length - 1; i++) {
       if (obj[parts[i]] == null) obj[parts[i]] = {};
       obj = obj[parts[i]];
     }
+
     const key = parts[parts.length - 1];
+
     if (value === '' || value === null || value === undefined) {
       delete obj[key];
     } else {
       obj[key] = value;
     }
-    this._fire();
+
+    if (flush) {
+      this._mainEditing = true;
+      this._fire(cfg);
+      this._mainEditing = false;
+    } else {
+      this._config = cfg;
+      this._pending = cfg;
+    }
+  }
+
+  _mergeHeader(values, flush = false) {
+    const cfg = JSON.parse(JSON.stringify(this._config));
+    cfg.header = { ...(cfg.header || {}), ...values };
+
+    Object.keys(cfg.header).forEach(k => {
+      if (cfg.header[k] === '' || cfg.header[k] === null || cfg.header[k] === undefined) {
+        delete cfg.header[k];
+      }
+    });
+
+    if (flush) {
+      this._mainEditing = true;
+      this._fire(cfg);
+      this._mainEditing = false;
+    } else {
+      this._config = cfg;
+      this._pending = cfg;
+    }
+  }
+
+  _mergeRoot(values, flush = false) {
+    const cfg = JSON.parse(JSON.stringify(this._config));
+
+    Object.entries(values).forEach(([k, v]) => {
+      if (v === '' || v === null || v === undefined) delete cfg[k];
+      else cfg[k] = v;
+    });
+
+    if (flush) {
+      this._mainEditing = true;
+      this._fire(cfg);
+      this._mainEditing = false;
+    } else {
+      this._config = cfg;
+      this._pending = cfg;
+    }
   }
 
   _iconMode() {
@@ -117,78 +163,31 @@ class HaGlowCardEditor extends HTMLElement {
     return this._stateModeOverride || 'none';
   }
 
-  _el(id) { return this.shadowRoot.getElementById(id); }
-
-  _val(id, v) {
-    const el = this._el(id);
-    if (el) el.value = v;
+  _el(id) {
+    return this.shadowRoot.getElementById(id);
   }
 
   _hexToRgb(hex) {
-    const m = hex.replace('#', '').match(/^([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+    const m = String(hex || '').replace('#', '').match(/^([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
     if (!m) return null;
     return `${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}`;
   }
 
   _rgbToHex(rgb) {
-    const m = rgb.match(/(\d+)[,\s]+(\d+)[,\s]+(\d+)/);
+    const m = String(rgb || '').match(/(\d+)[,\s]+(\d+)[,\s]+(\d+)/);
     if (!m) return null;
-    return '#' + [m[1], m[2], m[3]].map(n => parseInt(n).toString(16).padStart(2, '0')).join('');
+    return '#' + [m[1], m[2], m[3]]
+      .map(n => Math.max(0, Math.min(255, parseInt(n, 10))).toString(16).padStart(2, '0'))
+      .join('');
   }
 
-  /** Accepts hex (#rrggbb) or RGB string (r, g, b) → always returns RGB */
   _toRgb(val) {
-    const v = val.trim();
+    const v = String(val || '').trim();
     if (v.startsWith('#')) return this._hexToRgb(v);
     if (/\d/.test(v)) return v;
     return null;
   }
 
-  /** HTML: color picker square + text field. placeholder shows the default value. */
-  _colorFieldHtml(id, label, placeholder = '', hint = '') {
-    return `
-      <div class="color-field">
-        <input type="color" id="${id}-picker" class="color-square" title="Pick color">
-        <ha-textfield id="${id}" label="${label}" placeholder="${placeholder}" style="flex:1;"></ha-textfield>
-      </div>
-      ${hint ? `<div class="hint">${hint}</div>` : ''}`;
-  }
-
-  /** Populate color field. isRgb=true → stored as RGB, displayed as HEX. */
-  _populateColor(id, value, isRgb = false) {
-    let hex = null;
-    if (isRgb) {
-      hex = value ? this._rgbToHex(value) : null;
-      this._val(id, hex || '');
-    } else {
-      hex = value?.startsWith('#') ? value : this._rgbToHex(value || '');
-      this._val(id, value);
-    }
-    const picker = this._el(`${id}-picker`);
-    if (picker) picker.value = hex || '#ffffff';
-  }
-
-  /** Wire picker + text field. isRgb=true → stored as RGB, displayed as HEX. */
-  _wireColor(id, path, isRgb = false) {
-    const picker = this._el(`${id}-picker`);
-    const field  = this._el(id);
-    picker?.addEventListener('input', e => {
-      const hex = e.target.value;
-      const store = isRgb ? this._hexToRgb(hex) : hex;
-      if (field) field.value = hex;
-      this._set(path, store);
-    });
-    field?.addEventListener('change', e => {
-      const val = e.target.value.trim();
-      const hex = val.startsWith('#') ? val : this._rgbToHex(val);
-      const store = isRgb ? (this._toRgb(val) || val) : val;
-      if (hex && field) field.value = hex;
-      if (hex && picker) picker.value = hex;
-      this._set(path, store);
-    });
-  }
-
-  /** CSS-Shorthand in {t,r,b,l} aufteilen */
   _parseMargin(str) {
     const p = (str || '0 -15px -15px').trim().split(/\s+/);
     if (p.length === 1) return { t: p[0], r: p[0], b: p[0], l: p[0] };
@@ -197,169 +196,77 @@ class HaGlowCardEditor extends HTMLElement {
     return { t: p[0], r: p[1], b: p[2], l: p[3] };
   }
 
-  /** Vier Felder → CSS-String zusammensetzen und speichern */
-  _composeMargin() {
-    const t = this._el('f-margin-top')?.value?.trim()    || '0';
-    const r = this._el('f-margin-right')?.value?.trim()  || '0';
-    const b = this._el('f-margin-bottom')?.value?.trim() || '0';
-    const l = this._el('f-margin-left')?.value?.trim()   || '0';
-    this._set('inner_margin', `${t} ${r} ${b} ${l}`);
+  _composeMarginFromForm(v) {
+    return `${v.margin_top || '0'} ${v.margin_right || '0'} ${v.margin_bottom || '0'} ${v.margin_left || '0'}`;
   }
 
-  // ── Render ───────────────────────────────────────────────────────────────
-
   _render() {
-    const cfg = this._config;
-    const h = cfg.header || {};
+    const h = this._config.header || {};
     const iconMode = this._iconMode();
-    const subMode  = this._subtitleMode();
+    const subMode = this._subtitleMode();
+    const stateMode = this._stateMode();
 
     this.shadowRoot.innerHTML = `
-      <style>
-        :host { display: block; }
-        /* ─ Tabs ─ */
-        .tabs {
-          display: flex;
-          border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.12));
-          margin-bottom: 4px;
-        }
-        .tab {
-          padding: 10px 18px;
-          border: none; background: none; cursor: pointer;
-          font-size: 14px; font-weight: 500;
-          color: var(--secondary-text-color);
-          border-bottom: 2px solid transparent;
-          margin-bottom: -1px;
-        }
-        .tab.active {
-          color: var(--primary-color, #0381f9);
-          border-bottom-color: var(--primary-color, #0381f9);
-        }
-        /* ─ Abschnitte ─ */
-        .section {
-          font-size: 16px; font-weight: 500;
-          color: var(--primary-text-color);
-          margin: 24px 0 10px;
-          padding: 0;
-        }
-        .section:first-child { margin-top: 12px; }
-        /* ─ Felder ─ */
-        .field { margin-bottom: 10px; }
-        .field label { display: block; font-size: 12px; color: var(--secondary-text-color); margin-bottom: 4px; }
-        .hint { font-size: 11px; color: var(--secondary-text-color); margin-top: 4px; line-height: 1.5; }
-        ha-textfield, ha-entity-picker, ha-icon-picker { width: 100%; display: block; }
-        .row2 { display: flex; gap: 8px; }
-        .row2 > * { flex: 1; min-width: 0; }
-        ha-form { --ha-form-grid-padding: 0; display: block; }
-        textarea {
-          width: 100%; min-height: 72px; padding: 8px 12px;
-          border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
-          border-radius: 4px; background: var(--card-background-color, #1c1c1c);
-          color: var(--primary-text-color); font-size: 13px;
-          font-family: var(--code-font-family, monospace);
-          box-sizing: border-box; resize: vertical;
-        }
-        .hidden { display: none !important; }
-        /* ─ Farbfeld ─ */
-        .color-field { display: flex; gap: 8px; align-items: center; }
-        .color-square {
-          width: 30px; height: 30px; flex-shrink: 0;
-          border-radius: 0; border: none; cursor: pointer; padding: 0;
-        }
-        /* ─ Embedded Editor ─ */
-        hui-card-element-editor, hui-card-picker { display: block; }
-        .embed-header {
-          display: flex; align-items: center; gap: 8px;
-          padding: 4px 0 12px;
-        }
-        .embed-header .card-type-label {
-          flex: 1; font-size: 13px; color: var(--secondary-text-color);
-          font-family: var(--code-font-family, monospace);
-        }
-        .embed-header button {
-          padding: 6px 14px; border-radius: 6px; border: none; cursor: pointer;
-          background: var(--primary-color, #0381f9); color: #fff;
-          font-size: 13px; font-weight: 500;
-        }
-        .embed-header button:hover { opacity: 0.85; }
-      </style>
+      <style>${this._css()}</style>
 
       <div class="tabs">
         <button class="tab ${this._activeTab === 'container' ? 'active' : ''}" id="tab-container">Content</button>
-        <button class="tab ${this._activeTab === 'embedded'  ? 'active' : ''}" id="tab-embedded">Container</button>
+        <button class="tab ${this._activeTab === 'embedded' ? 'active' : ''}" id="tab-embedded">Container</button>
       </div>
 
-      <!-- ═ Panel: Content ═ -->
       <div id="panel-container" class="${this._activeTab !== 'container' ? 'hidden' : ''}">
-
-        <!-- Title -->
         <div class="section">Title</div>
-        <div class="field"><ha-textfield id="f-title" label="Title *"></ha-textfield></div>
-        <div class="field">${this._colorFieldHtml('f-title-color', 'Title color', 'var(--primary-text-color)', 'Empty: uses var(--primary-text-color)')}</div>
-        <div class="field"><ha-form id="form-sub-mode"></ha-form></div>
+        <ha-form id="form-title"></ha-form>
+        <div class="field">${this._colorFieldHtml('title_color', 'Title color', 'var(--primary-text-color)')}</div>
+
+        <ha-form id="form-sub-mode"></ha-form>
         <div id="sub-tpl-wrap" class="field ${subMode !== 'template' ? 'hidden' : ''}">
           <label>Jinja2 template</label>
-          <textarea id="f-subtitle-tpl" placeholder="{{ (states('sensor.abc') | int) }} W"></textarea>
+          <textarea id="subtitle_template" placeholder="{{ (states('sensor.abc') | int) }} W"></textarea>
           <div class="hint">Evaluated server-side. HTML in the output is rendered.</div>
         </div>
-        <div id="sub-color-wrap" class="field ${subMode !== 'template' ? 'hidden' : ''}">${this._colorFieldHtml('f-sub-color', 'Subtitle color', 'var(--secondary-text-color)', 'Empty: uses var(--secondary-text-color)')}</div>
-
-        <!-- Icon -->
-        <div class="section">Icon</div>
-        <div class="field"><ha-form id="form-icon-mode"></ha-form></div>
-        <div id="icon-mdi-wrap" class="field ${iconMode !== 'mdi' ? 'hidden' : ''}">
-          <ha-icon-picker id="f-icon" label="Choose icon" needs-hass></ha-icon-picker>
+        <div id="sub-color-wrap" class="field ${subMode !== 'template' ? 'hidden' : ''}">
+          ${this._colorFieldHtml('subtitle_color', 'Subtitle color', 'var(--secondary-text-color)')}
         </div>
-        <div id="icon-svg-wrap" class="field ${iconMode !== 'svg' ? 'hidden' : ''}">
-          <ha-textfield id="f-icon-path" label="Path (e.g. /local/custom_icons/icon.svg)"></ha-textfield>
+
+        <div class="section">Icon</div>
+        <ha-form id="form-icon-mode"></ha-form>
+        <div id="icon-mdi-wrap" class="${iconMode !== 'mdi' ? 'hidden' : ''}">
+          <ha-form id="form-icon-mdi"></ha-form>
+        </div>
+        <div id="icon-svg-wrap" class="${iconMode !== 'svg' ? 'hidden' : ''}">
+          <ha-form id="form-icon-svg"></ha-form>
         </div>
         <div id="icon-extras" class="${iconMode === 'none' ? 'hidden' : ''}">
-          <div class="field"><ha-textfield id="f-icon-size" label="Size (px)" type="number" min="16" max="96" style="width:100%;display:block;"></ha-textfield></div>
-          <div class="field">${this._colorFieldHtml('f-icon-color', 'Icon color', 'var(--primary-text-color)', 'Empty: uses var(--primary-text-color)')}</div>
+          <ha-form id="form-icon-extra"></ha-form>
+          <div class="field">${this._colorFieldHtml('icon_color', 'Icon color', 'var(--primary-text-color)')}</div>
         </div>
 
-        <!-- Main Value -->
         <div class="section">Main Value</div>
-        <div class="field"><ha-form id="form-state-mode"></ha-form></div>
-        <div id="state-entity-wrap" class="field">
-          <ha-form id="f-state-entity-form" needs-hass></ha-form>
+        <ha-form id="form-state-mode"></ha-form>
+        <div id="state-entity-wrap" class="${stateMode !== 'entity' ? 'hidden' : ''}">
+          <ha-form id="form-state-entity"></ha-form>
+          <ha-form id="form-state-extra"></ha-form>
+          <div class="hint">Leave unit empty to inherit the unit from the entity.</div>
         </div>
-        <div id="state-entity-extra" class="field row2">
-          <ha-textfield id="f-state-unit" label="Unit"></ha-textfield>
-          <ha-textfield id="f-state-dec" label="Decimal places" type="number" min="0" max="6"></ha-textfield>
-        </div>
-        <div id="state-entity-hint" class="field ${this._stateMode() !== 'entity' ? 'hidden' : ''}">
-          <div class="hint">Leave the field empty to inherit the value from the entity.</div>
-        </div>
-        <div id="state-tpl-wrap" class="field hidden">
+        <div id="state-tpl-wrap" class="field ${stateMode !== 'template' ? 'hidden' : ''}">
           <label>Jinja2 template</label>
-          <textarea id="f-state-tpl" placeholder="{{ (states('sensor.abc') | int) }} W"></textarea>
+          <textarea id="state_template" placeholder="{{ (states('sensor.abc') | int) }} W"></textarea>
           <div class="hint">Evaluated server-side. The output text is shown directly.</div>
         </div>
-        <div id="state-color-wrap" class="field ${this._stateMode() !== 'none' ? '' : 'hidden'}">${this._colorFieldHtml('f-state-color', 'Value color', 'var(--primary-text-color)', 'Empty: uses var(--primary-text-color)')}</div>
+        <div id="state-color-wrap" class="field ${stateMode === 'none' ? 'hidden' : ''}">
+          ${this._colorFieldHtml('state_color', 'Value color', 'var(--primary-text-color)')}
+        </div>
 
-        <!-- Tile Settings -->
         <div class="section">Tile Settings</div>
-        <div class="field">${this._colorFieldHtml('f-accent', 'Glow color', '', 'Empty: uses blue (3, 129, 249)')}</div>
-        <div class="row2" style="margin-bottom:8px;">
-          <ha-textfield id="f-margin-top"    label="Margin top"    style="display:block;"></ha-textfield>
-          <ha-textfield id="f-margin-right"   label="Margin right"  style="display:block;"></ha-textfield>
-        </div>
-        <div class="row2 field">
-          <ha-textfield id="f-margin-bottom"  label="Margin bottom" style="display:block;"></ha-textfield>
-          <ha-textfield id="f-margin-left"    label="Margin left"   style="display:block;"></ha-textfield>
-        </div>
+        <div class="field">${this._colorFieldHtml('accent_color', 'Glow color', '#0381f9', true)}</div>
+        <ha-form id="form-margin"></ha-form>
         <div class="hint">Inner card margin. Negative values stretch the card to the container edges.</div>
-        <div class="field" style="margin-top:10px;"><ha-form id="form-border"></ha-form></div>
-
+        <ha-form id="form-border"></ha-form>
       </div>
 
-      <!-- ═ Panel: Container ═ -->
       <div id="panel-embedded" class="${this._activeTab !== 'embedded' ? 'hidden' : ''}">
-
-        <!-- Picker: visible when no card selected -->
         <div id="embed-picker"></div>
-        <!-- Editor: visible when card selected -->
         <div id="embed-editor" class="hidden">
           <div class="embed-header">
             <span class="card-type-label" id="card-type-label"></span>
@@ -367,46 +274,455 @@ class HaGlowCardEditor extends HTMLElement {
           </div>
           <div id="card-editor-slot"></div>
         </div>
-
       </div>
     `;
 
-    this._populate();
-    this._wire();
     this._initForms();
+    this._populateNativeFields();
+    this._wireNativeFields();
+    this._wireTabs();
+
     if (this._activeTab === 'embedded') this._initEmbedded();
   }
 
+  _css() {
+    return `
+      :host { display:block; }
+      .tabs {
+        display:flex;
+        border-bottom:1px solid var(--divider-color, rgba(0,0,0,0.12));
+        margin-bottom:4px;
+      }
+      .tab {
+        padding:10px 18px;
+        border:none;
+        background:none;
+        cursor:pointer;
+        font-size:14px;
+        font-weight:500;
+        color:var(--secondary-text-color);
+        border-bottom:2px solid transparent;
+        margin-bottom:-1px;
+      }
+      .tab.active {
+        color:var(--primary-color, #0381f9);
+        border-bottom-color:var(--primary-color, #0381f9);
+      }
+      .section {
+        font-size:16px;
+        font-weight:500;
+        color:var(--primary-text-color);
+        margin:24px 0 10px;
+      }
+      .section:first-child { margin-top:12px; }
+      .field { margin-bottom:10px; }
+      .field label {
+        display:block;
+        font-size:12px;
+        color:var(--secondary-text-color);
+        margin-bottom:4px;
+      }
+      .hint {
+        font-size:11px;
+        color:var(--secondary-text-color);
+        margin-top:4px;
+        line-height:1.5;
+      }
+      ha-form {
+        --ha-form-grid-padding:0;
+        display:block;
+        margin-bottom:10px;
+      }
+      textarea {
+        width:100%;
+        min-height:72px;
+        padding:8px 12px;
+        border:1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius:4px;
+        background:var(--card-background-color, #1c1c1c);
+        color:var(--primary-text-color);
+        font-size:13px;
+        font-family:var(--code-font-family, monospace);
+        box-sizing:border-box;
+        resize:vertical;
+      }
+      .hidden { display:none !important; }
+      .color-field {
+        display:flex;
+        gap:8px;
+        align-items:center;
+      }
+      .color-square {
+        width:36px;
+        height:36px;
+        flex-shrink:0;
+        border-radius:4px;
+        border:1px solid var(--divider-color, rgba(0,0,0,0.12));
+        cursor:pointer;
+        padding:0;
+      }
+      hui-card-element-editor, hui-card-picker { display:block; }
+      .embed-header {
+        display:flex;
+        align-items:center;
+        gap:8px;
+        padding:4px 0 12px;
+      }
+      .embed-header .card-type-label {
+        flex:1;
+        font-size:13px;
+        color:var(--secondary-text-color);
+        font-family:var(--code-font-family, monospace);
+      }
+      .embed-header button, .fp-button {
+        padding:6px 14px;
+        border-radius:6px;
+        border:none;
+        cursor:pointer;
+        background:var(--primary-color,#0381f9);
+        color:#fff;
+        font-size:13px;
+        font-weight:500;
+      }
+      .fp-item {
+        padding:8px 12px;
+        cursor:pointer;
+        border-radius:6px;
+        margin-bottom:4px;
+        background:var(--secondary-background-color,rgba(255,255,255,0.06));
+      }
+      .fp-item:hover {
+        background:var(--primary-color,#0381f9);
+        color:#fff;
+      }
+      .fp-sub {
+        font-size:11px;
+        color:var(--secondary-text-color);
+      }
+      .fp-item:hover .fp-sub {
+        color:rgba(255,255,255,0.7);
+      }
+    `;
+  }
+
+  _colorFieldHtml(id, label, placeholder = '', isRgb = false) {
+    return `
+      <div class="color-field" data-rgb="${isRgb ? '1' : '0'}">
+        <input type="color" id="${id}-picker" class="color-square" title="Pick color">
+        <ha-form id="form-color-${id}"></ha-form>
+      </div>
+      <div class="hint">Empty: uses ${placeholder || 'default value'}</div>
+    `;
+  }
+
+  _initForms() {
+    const h = this._config.header || {};
+    const cfg = this._config;
+    const margin = this._parseMargin(cfg.inner_margin);
+
+    this._setupForm('form-title',
+      [{ name:'title', label:'Title *', selector:{ text:{} } }],
+      { title:h.title || '' },
+      v => this._mergeHeader(v, false),
+      true
+    );
+
+    this._setupForm('form-sub-mode',
+      [{ name:'sub_mode', label:'Subtitle', selector:{ select:{ options:[
+        { value:'none', label:'No subtitle' },
+        { value:'template', label:'Jinja2 template' },
+      ] } } }],
+      { sub_mode:this._subtitleMode() },
+      v => {
+        const mode = v.sub_mode;
+        this._el('sub-tpl-wrap')?.classList.toggle('hidden', mode !== 'template');
+        this._el('sub-color-wrap')?.classList.toggle('hidden', mode !== 'template');
+        if (mode !== 'template') this._mergeHeader({ subtitle_template:null, subtitle_color:null }, true);
+      },
+      false
+    );
+
+    this._setupForm('form-icon-mode',
+      [{ name:'icon_mode', label:'Icon', selector:{ select:{ options:[
+        { value:'none', label:'No icon' },
+        { value:'mdi', label:'MDI icon' },
+        { value:'svg', label:'SVG path' },
+      ] } } }],
+      { icon_mode:this._iconMode() },
+      v => {
+        const mode = v.icon_mode;
+        this._iconModeOverride = mode === 'none' ? null : mode;
+        this._el('icon-mdi-wrap')?.classList.toggle('hidden', mode !== 'mdi');
+        this._el('icon-svg-wrap')?.classList.toggle('hidden', mode !== 'svg');
+        this._el('icon-extras')?.classList.toggle('hidden', mode === 'none');
+
+        const patch = {};
+        if (mode !== 'mdi') patch.icon = null;
+        if (mode !== 'svg') patch.icon_path = null;
+        if (mode === 'none') {
+          patch.icon = null;
+          patch.icon_path = null;
+          patch.icon_color = null;
+        }
+        this._mergeHeader(patch, true);
+      },
+      false
+    );
+
+    this._setupForm('form-icon-mdi',
+      [{ name:'icon', label:'Icon', selector:{ icon:{} }, context:{ icon_entity:'entity' } }],
+      { icon:h.icon || '' },
+      v => this._mergeHeader(v, false),
+      true
+    );
+
+    this._setupForm('form-icon-svg',
+      [{ name:'icon_path', label:'Path, e.g. /local/custom_icons/icon.svg', selector:{ text:{} } }],
+      { icon_path:h.icon_path || '' },
+      v => this._mergeHeader(v, false),
+      true
+    );
+
+    this._setupForm('form-icon-extra',
+      [{ name:'icon_size', label:'Size px', selector:{ number:{ min:16, max:96, mode:'box' } } }],
+      { icon_size:h.icon_size ?? 40 },
+      v => this._mergeHeader({ icon_size:parseInt(v.icon_size, 10) || 40 }, false),
+      true
+    );
+
+    this._setupForm('form-state-mode',
+      [{ name:'state_mode', label:'Main Value', selector:{ select:{ options:[
+        { value:'none', label:'No value' },
+        { value:'entity', label:'Entity' },
+        { value:'template', label:'Jinja2 template' },
+      ] } } }],
+      { state_mode:this._stateMode() },
+      v => {
+        const mode = v.state_mode;
+        this._stateModeOverride = mode === 'none' ? null : mode;
+        this._el('state-entity-wrap')?.classList.toggle('hidden', mode !== 'entity');
+        this._el('state-tpl-wrap')?.classList.toggle('hidden', mode !== 'template');
+        this._el('state-color-wrap')?.classList.toggle('hidden', mode === 'none');
+
+        const patch = {};
+        if (mode !== 'entity') {
+          patch.state_entity = null;
+          patch.state_unit = null;
+          patch.state_decimals = null;
+        }
+        if (mode !== 'template') patch.state_template = null;
+        if (mode === 'none') patch.state_color = null;
+        this._mergeHeader(patch, true);
+      },
+      false
+    );
+
+    this._setupForm('form-state-entity',
+      [{ name:'state_entity', label:'Entity', selector:{ entity:{} } }],
+      { state_entity:h.state_entity || '' },
+      v => this._mergeHeader({ state_entity:v.state_entity || null }, true),
+      false
+    );
+
+    this._setupForm('form-state-extra',
+      [
+        { name:'state_unit', label:'Unit', selector:{ text:{} } },
+        { name:'state_decimals', label:'Decimal places', selector:{ number:{ min:0, max:6, mode:'box' } } },
+      ],
+      {
+        state_unit:h.state_unit || '',
+        state_decimals:h.state_decimals ?? 0,
+      },
+      v => this._mergeHeader({
+        state_unit:v.state_unit || null,
+        state_decimals:parseInt(v.state_decimals, 10) || 0,
+      }, false),
+      true
+    );
+
+    this._setupForm('form-margin',
+      [
+        { name:'margin_top', label:'Margin top', selector:{ text:{} } },
+        { name:'margin_right', label:'Margin right', selector:{ text:{} } },
+        { name:'margin_bottom', label:'Margin bottom', selector:{ text:{} } },
+        { name:'margin_left', label:'Margin left', selector:{ text:{} } },
+      ],
+      {
+        margin_top:margin.t,
+        margin_right:margin.r,
+        margin_bottom:margin.b,
+        margin_left:margin.l,
+      },
+      v => this._mergeRoot({ inner_margin:this._composeMarginFromForm(v) }, false),
+      true
+    );
+
+    this._setupForm('form-border',
+      [{ name:'border', label:'Border', selector:{ select:{ options:[
+        { value:'show', label:'Show border' },
+        { value:'hide', label:'No border' },
+        { value:'glow', label:'Glow border' },
+      ] } } }],
+      { border:cfg.show_border === false ? 'hide' : cfg.border_glow === true ? 'glow' : 'show' },
+      v => {
+        if (v.border === 'hide') this._mergeRoot({ show_border:false, border_glow:null }, true);
+        else if (v.border === 'glow') this._mergeRoot({ show_border:null, border_glow:true }, true);
+        else this._mergeRoot({ show_border:null, border_glow:null }, true);
+      },
+      false
+    );
+
+    this._setupColorForm('title_color', h.title_color || '', false, val => this._mergeHeader({ title_color:val }, false), 'Title color');
+    this._setupColorForm('subtitle_color', h.subtitle_color || '', false, val => this._mergeHeader({ subtitle_color:val }, false), 'Subtitle color');
+    this._setupColorForm('icon_color', h.icon_color || '', false, val => this._mergeHeader({ icon_color:val }, false), 'Icon color');
+    this._setupColorForm('state_color', h.state_color || '', false, val => this._mergeHeader({ state_color:val }, false), 'Value color');
+    this._setupColorForm('accent_color', cfg.accent_color || '3, 129, 249', true, val => this._mergeRoot({ accent_color:val }, false), 'Glow color');
+  }
+
+  _setupForm(id, schema, data, onChange, buffered = true) {
+    const form = this._el(id);
+    if (!form) return;
+
+    form.hass = this._hass;
+    form.schema = schema;
+    form.data = data;
+    form.computeLabel = s => s.label ?? s.name;
+
+    form.addEventListener('value-changed', ev => {
+      onChange(ev.detail.value || {});
+      if (!buffered) this._flushPending();
+    });
+
+    if (buffered) {
+      form.addEventListener('focusout', () => {
+        setTimeout(() => {
+          if (this._pending && this.shadowRoot.activeElement !== form) this._flushPending();
+        }, 0);
+      });
+    }
+  }
+
+  _setupColorForm(id, value, isRgb, onChange, label) {
+    const form = this._el(`form-color-${id}`);
+    if (!form) return;
+
+    const shown = isRgb ? (this._rgbToHex(value) || '') : (value || '');
+
+    form.hass = this._hass;
+    form.schema = [{ name:id, label:label || id.replace(/_/g, ' '), selector:{ text:{} } }];
+    form.data = { [id]:shown };
+    form.computeLabel = s => s.label ?? s.name;
+
+    form.addEventListener('value-changed', ev => {
+      const raw = ev.detail.value?.[id] || '';
+      const store = isRgb ? (this._toRgb(raw) || raw) : raw;
+      onChange(store);
+      this._syncColorPicker(id, raw, isRgb);
+    });
+
+    form.addEventListener('focusout', () => {
+      setTimeout(() => this._flushPending(), 0);
+    });
+  }
+
+  _populateNativeFields() {
+    const h = this._config.header || {};
+
+    const sub = this._el('subtitle_template');
+    if (sub) sub.value = h.subtitle_template || '';
+
+    const state = this._el('state_template');
+    if (state) state.value = h.state_template || '';
+
+    ['title_color', 'subtitle_color', 'icon_color', 'state_color'].forEach(id => {
+      const val = h[id] || '';
+      const picker = this._el(`${id}-picker`);
+      if (picker) picker.value = /^#[0-9a-fA-F]{6}$/.test(val) ? val : '#ffffff';
+    });
+
+    const accentPicker = this._el('accent_color-picker');
+    if (accentPicker) accentPicker.value = this._rgbToHex(this._config.accent_color || '3, 129, 249') || '#0381f9';
+  }
+
+  _wireNativeFields() {
+    const sub = this._el('subtitle_template');
+    sub?.addEventListener('change', e => this._mergeHeader({ subtitle_template:e.target.value }, true));
+
+    const state = this._el('state_template');
+    state?.addEventListener('change', e => this._mergeHeader({ state_template:e.target.value }, true));
+
+    this._wireColorPicker('title_color', false, val => this._mergeHeader({ title_color:val }, true));
+    this._wireColorPicker('subtitle_color', false, val => this._mergeHeader({ subtitle_color:val }, true));
+    this._wireColorPicker('icon_color', false, val => this._mergeHeader({ icon_color:val }, true));
+    this._wireColorPicker('state_color', false, val => this._mergeHeader({ state_color:val }, true));
+    this._wireColorPicker('accent_color', true, val => this._mergeRoot({ accent_color:val }, true));
+  }
+
+  _wireColorPicker(id, isRgb, onChange) {
+    const picker = this._el(`${id}-picker`);
+    picker?.addEventListener('input', e => {
+      const hex = e.target.value;
+      const store = isRgb ? this._hexToRgb(hex) : hex;
+      const form = this._el(`form-color-${id}`);
+      if (form) form.data = { [id]:hex };
+      onChange(store);
+    });
+  }
+
+  _syncColorPicker(id, raw, isRgb) {
+    const picker = this._el(`${id}-picker`);
+    if (!picker) return;
+    const hex = isRgb ? this._rgbToHex(raw) : raw;
+    if (/^#[0-9a-fA-F]{6}$/.test(hex)) picker.value = hex;
+  }
+
+  _wireTabs() {
+    this._el('tab-container')?.addEventListener('click', () => this._switchTab('container'));
+    this._el('tab-embedded')?.addEventListener('click', () => this._switchTab('embedded'));
+
+    this._el('btn-change-type')?.addEventListener('click', () => {
+      const embedPicker = this._el('embed-picker');
+      if (embedPicker) embedPicker.innerHTML = '';
+      this._cardEditor = null;
+      const slot = this._el('card-editor-slot');
+      if (slot) slot.innerHTML = '';
+      this._showPicker();
+    });
+  }
+
   _switchTab(tab) {
+    this._flushPending();
     this._activeTab = tab;
-    this._el('panel-container').classList.toggle('hidden', tab !== 'container');
-    this._el('panel-embedded').classList.toggle('hidden', tab !== 'embedded');
-    this._el('tab-container').classList.toggle('active', tab === 'container');
-    this._el('tab-embedded').classList.toggle('active', tab === 'embedded');
+    this._el('panel-container')?.classList.toggle('hidden', tab !== 'container');
+    this._el('panel-embedded')?.classList.toggle('hidden', tab !== 'embedded');
+    this._el('tab-container')?.classList.toggle('active', tab === 'container');
+    this._el('tab-embedded')?.classList.toggle('active', tab === 'embedded');
     if (tab === 'embedded') this._initEmbedded();
   }
 
   _getLovelace() {
     if (this._lovelace) return this._lovelace;
     if (this._lovelaceCache) return this._lovelaceCache;
+
     try {
       const main = document.querySelector('home-assistant')
         ?.shadowRoot?.querySelector('home-assistant-main');
+
       const lv = main?.shadowRoot?.querySelector('ha-panel-lovelace')?.lovelace
         ?? main?.shadowRoot?.querySelector('partial-panel-resolver')
-            ?.shadowRoot?.querySelector('ha-panel-lovelace')?.lovelace
+          ?.shadowRoot?.querySelector('ha-panel-lovelace')?.lovelace
         ?? null;
+
       if (lv) this._lovelaceCache = lv;
       return lv;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
 
   _initEmbedded() {
-    if (this._config.card?.type) {
-      this._showEditor();
-    } else {
-      this._showPicker();
-    }
+    if (this._config.card?.type) this._showEditor();
+    else this._showPicker();
   }
 
   _showPicker() {
@@ -416,19 +732,20 @@ class HaGlowCardEditor extends HTMLElement {
 
     embedEditor?.classList.add('hidden');
     this._cardEditor = null;
+
     const slot = this._el('card-editor-slot');
     if (slot) slot.innerHTML = '';
+
     embedPicker.innerHTML = '';
 
-    // hui-card-picker is only registered if the stack editor or "add card"
-    // dialog has been opened at least once in this session.
-    // Check synchronously — no whenDefined() that hangs indefinitely.
     if (customElements.get('hui-card-picker')) {
       const picker = document.createElement('hui-card-picker');
       embedPicker.appendChild(picker);
       picker.hass = this._hass;
+
       const lovelace = this._getLovelace();
       if (lovelace) picker.lovelace = lovelace;
+
       picker.addEventListener('config-changed', e => {
         e.stopPropagation();
         this._config.card = e.detail.config;
@@ -448,26 +765,14 @@ class HaGlowCardEditor extends HTMLElement {
     }));
 
     container.innerHTML = `
-      <style>
-        .fp-item { padding:8px 12px; cursor:pointer; border-radius:6px; margin-bottom:4px;
-          background:var(--secondary-background-color,rgba(255,255,255,0.06)); }
-        .fp-item:hover { background:var(--primary-color,#0381f9); color:#fff; }
-        .fp-item:hover .fp-sub { color:rgba(255,255,255,0.7); }
-        .fp-sub { font-size:11px; color:var(--secondary-text-color); }
-      </style>
       ${customCards.length ? `
-        <div style="font-size:11px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;
-            color:var(--secondary-text-color);margin:8px 0 6px;">Custom Cards</div>
+        <div class="hint" style="font-weight:600;text-transform:uppercase;margin:8px 0 6px;">Custom Cards</div>
         <div id="fp-list"></div>
       ` : ''}
-      <div style="font-size:11px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;
-          color:var(--secondary-text-color);margin:14px 0 6px;">Enter type</div>
+      <div class="hint" style="font-weight:600;text-transform:uppercase;margin:14px 0 6px;">Enter type</div>
       <div style="display:flex;gap:8px;align-items:center;">
-        <ha-textfield id="fp-type" label="e.g. entities, tile, custom:apexcharts-card"
-          style="flex:1;display:block;"></ha-textfield>
-        <button id="fp-confirm" style="padding:10px 16px;border-radius:6px;border:none;
-          cursor:pointer;background:var(--primary-color,#0381f9);color:#fff;font-size:14px;
-          white-space:nowrap;flex-shrink:0;">Add</button>
+        <ha-form id="fp-form" style="flex:1;"></ha-form>
+        <button id="fp-confirm" class="fp-button">Add</button>
       </div>
     `;
 
@@ -477,14 +782,29 @@ class HaGlowCardEditor extends HTMLElement {
         <div class="fp-item" data-type="${c.type}">
           <div style="font-size:13px;font-weight:500;">${c.name}</div>
           <div class="fp-sub">${c.type}</div>
-        </div>`).join('');
-      listEl.querySelectorAll('.fp-item').forEach(item =>
-        item.addEventListener('click', () => this._pickCard(item.dataset.type, container)));
+        </div>
+      `).join('');
+
+      listEl.querySelectorAll('.fp-item').forEach(item => {
+        item.addEventListener('click', () => this._pickCard(item.dataset.type, container));
+      });
+    }
+
+    const fpForm = container.querySelector('#fp-form');
+    if (fpForm) {
+      fpForm.hass = this._hass;
+      fpForm.schema = [{ name:'type', label:'e.g. entities, tile, custom:apexcharts-card', selector:{ text:{} } }];
+      fpForm.data = { type:'' };
+      fpForm.computeLabel = s => s.label ?? s.name;
     }
 
     container.querySelector('#fp-confirm')?.addEventListener('click', () => {
-      const type = container.querySelector('#fp-type')?.value?.trim();
-      if (type) this._pickCard(type, container);
+      const type = fpForm?.data?.type || fpForm?.value?.type || '';
+      if (type) this._pickCard(type.trim(), container);
+    });
+
+    fpForm?.addEventListener('value-changed', ev => {
+      fpForm.data = ev.detail.value;
     });
   }
 
@@ -502,7 +822,10 @@ class HaGlowCardEditor extends HTMLElement {
     if (!slot || !embedEditor) return;
 
     const cardType = this._config.card?.type;
-    if (!cardType) { this._showPicker(); return; }
+    if (!cardType) {
+      this._showPicker();
+      return;
+    }
 
     if (embedPicker) embedPicker.innerHTML = '';
     embedEditor.classList.remove('hidden');
@@ -510,7 +833,6 @@ class HaGlowCardEditor extends HTMLElement {
     const label = this._el('card-type-label');
     if (label) label.textContent = cardType;
 
-    // Gleicher Typ: nur Wert aktualisieren
     if (this._cardEditor) {
       this._cardEditor.value = this._config.card;
       return;
@@ -518,13 +840,16 @@ class HaGlowCardEditor extends HTMLElement {
 
     try {
       await customElements.whenDefined('hui-card-element-editor');
-      if (this._cardEditor) return; // race-guard
+      if (this._cardEditor) return;
 
       const editor = document.createElement('hui-card-element-editor');
-      slot.appendChild(editor); // erst ins DOM, dann Properties
+      slot.appendChild(editor);
+
       editor.hass = this._hass;
+
       const lovelace = this._getLovelace();
       if (lovelace) editor.lovelace = lovelace;
+
       editor.value = this._config.card || {};
 
       editor.addEventListener('config-changed', e => {
@@ -532,187 +857,19 @@ class HaGlowCardEditor extends HTMLElement {
         this._config.card = e.detail.config;
         this._fire();
       });
+
       this._cardEditor = editor;
     } catch (err) {
       slot.innerHTML = `<div style="color:var(--error-color,red);font-size:13px;padding:8px;">${err.message}</div>`;
     }
   }
-
-  _populate() {
-    const cfg = this._config;
-    const h = cfg.header || {};
-    const iconMode = this._iconMode();
-    const subMode = this._subtitleMode();
-
-    this._val('f-title', h.title || '');
-    this._populateColor('f-title-color', h.title_color || '');
-
-    this._val('f-icon-size', h.icon_size != null ? String(h.icon_size) : '40');
-    this._populateColor('f-icon-color', h.icon_color || '');
-
-    const tplTA = this._el('f-subtitle-tpl');
-    if (tplTA) tplTA.value = h.subtitle_template || '';
-    this._el('sub-color-wrap').classList.toggle('hidden', subMode !== 'template');
-    this._populateColor('f-sub-color', h.subtitle_color || '');
-
-    const stateMode = this._stateMode();
-    this._el('state-entity-wrap').classList.toggle('hidden', stateMode !== 'entity');
-    this._el('state-entity-extra').classList.toggle('hidden', stateMode !== 'entity');
-    this._el('state-entity-hint').classList.toggle('hidden', stateMode !== 'entity');
-    this._el('state-tpl-wrap').classList.toggle('hidden', stateMode !== 'template');
-    this._el('state-color-wrap').classList.toggle('hidden', stateMode === 'none');
-    this._val('f-state-unit', h.state_unit || '');
-    this._val('f-state-dec', h.state_decimals != null ? String(h.state_decimals) : '0');
-    const stateTplTA = this._el('f-state-tpl');
-    if (stateTplTA) stateTplTA.value = h.state_template || '';
-    this._populateColor('f-state-color', h.state_color || '');
-
-    this._populateColor('f-accent', cfg.accent_color || '3, 129, 249', true);
-    const m = this._parseMargin(cfg.inner_margin);
-    this._val('f-margin-top',    m.t);
-    this._val('f-margin-right',  m.r);
-    this._val('f-margin-bottom', m.b);
-    this._val('f-margin-left',   m.l);
-
-    // HA picker elements need hass + value set after paint
-    requestAnimationFrame(() => {
-      if (this._hass) {
-        this.shadowRoot.querySelectorAll('[needs-hass]').forEach(el => { el.hass = this._hass; });
-      }
-      if (iconMode === 'mdi') {
-        const ip = this._el('f-icon');
-        if (ip) ip.value = h.icon || '';
-      } else if (iconMode === 'svg') {
-        this._val('f-icon-path', h.icon_path || '');
-      }
-      const ef = this._el('f-state-entity-form');
-      if (ef) {
-        ef.hass = this._hass;
-        ef.schema = [{ name: 'state_entity', label: 'Entity', selector: { entity: {} } }];
-        ef.data = { state_entity: h.state_entity || null };
-        ef.computeLabel = s => s.label ?? s.name;
-      }
-    });
-  }
-
-  _wire() {
-    const chg = (id, path, transform) => {
-      this._el(id)?.addEventListener('change', e => {
-        const v = transform ? transform(e.target.value) : e.target.value;
-        this._set(path, v);
-      });
-    };
-    const valEvt = (id, path) => {
-      this._el(id)?.addEventListener('value-changed', e => this._set(path, e.detail.value));
-    };
-
-    this._el('tab-container')?.addEventListener('click', () => this._switchTab('container'));
-    this._el('tab-embedded')?.addEventListener('click',  () => this._switchTab('embedded'));
-    this._el('btn-change-type')?.addEventListener('click', () => {
-      const embedPicker = this._el('embed-picker');
-      if (embedPicker) embedPicker.innerHTML = '';
-      this._cardEditor = null;
-      const slot = this._el('card-editor-slot');
-      if (slot) slot.innerHTML = '';
-      this._showPicker();
-    });
-
-    chg('f-title', 'header.title');
-    this._wireColor('f-title-color', 'header.title_color');
-
-    valEvt('f-icon', 'header.icon');
-    chg('f-icon-path', 'header.icon_path');
-    chg('f-icon-size', 'header.icon_size', v => parseInt(v) || 40);
-    this._wireColor('f-icon-color', 'header.icon_color');
-
-    this._el('f-subtitle-tpl')?.addEventListener('change', e => this._set('header.subtitle_template', e.target.value));
-    this._wireColor('f-sub-color', 'header.subtitle_color');
-
-    this._el('f-state-entity-form')?.addEventListener('value-changed', e => {
-      this._set('header.state_entity', e.detail.value?.state_entity || null);
-    });
-    chg('f-state-unit', 'header.state_unit');
-    chg('f-state-dec', 'header.state_decimals', v => parseInt(v) || 0);
-    this._el('f-state-tpl')?.addEventListener('change', e => this._set('header.state_template', e.target.value));
-    this._wireColor('f-state-color', 'header.state_color');
-
-    this._wireColor('f-accent', 'accent_color', true);
-
-    ['f-margin-top', 'f-margin-right', 'f-margin-bottom', 'f-margin-left'].forEach(id => {
-      this._el(id)?.addEventListener('change', () => this._composeMargin());
-    });
-  }
-
-  _initForms() {
-    const cfg = this._config;
-
-    const initForm = (id, fieldName, label, options, currentValue, onChange) => {
-      const form = this._el(id);
-      if (!form) return;
-      form.hass = this._hass;
-      form.schema = [{ name: fieldName, label, selector: { select: { options } } }];
-      form.data = { [fieldName]: currentValue };
-      form.computeLabel = s => s.label ?? s.name;
-      form.addEventListener('value-changed', e => onChange(e.detail.value[fieldName]));
-    };
-
-    initForm('form-sub-mode', 'sub_mode', 'Subtitle', [
-      { value: 'none', label: 'No subtitle' },
-      { value: 'template', label: 'Jinja2 template' },
-    ], this._subtitleMode(), mode => {
-      this._el('sub-tpl-wrap').classList.toggle('hidden', mode !== 'template');
-      this._el('sub-color-wrap').classList.toggle('hidden', mode !== 'template');
-      const h = this._config.header || {};
-      if (mode !== 'template' && h.subtitle_template) this._set('header.subtitle_template', null);
-    });
-
-    initForm('form-icon-mode', 'icon_mode', 'Icon', [
-      { value: 'none', label: 'No icon' },
-      { value: 'mdi', label: 'MDI icon' },
-      { value: 'svg', label: 'SVG (path)' },
-    ], this._iconMode(), mode => {
-      this._iconModeOverride = mode === 'none' ? null : mode;
-      this._el('icon-mdi-wrap').classList.toggle('hidden', mode !== 'mdi');
-      this._el('icon-svg-wrap').classList.toggle('hidden', mode !== 'svg');
-      this._el('icon-extras').classList.toggle('hidden', mode === 'none');
-      const h = this._config.header || {};
-      if (mode !== 'mdi' && h.icon) this._set('header.icon', null);
-      if (mode !== 'svg' && h.icon_path) this._set('header.icon_path', null);
-    });
-
-    initForm('form-state-mode', 'state_mode', 'Main Value', [
-      { value: 'none', label: 'No value' },
-      { value: 'entity', label: 'Entity' },
-      { value: 'template', label: 'Jinja2 template' },
-    ], this._stateMode(), mode => {
-      this._stateModeOverride = mode === 'none' ? null : mode;
-      this._el('state-entity-wrap').classList.toggle('hidden', mode !== 'entity');
-      this._el('state-entity-extra').classList.toggle('hidden', mode !== 'entity');
-      this._el('state-entity-hint').classList.toggle('hidden', mode !== 'entity');
-      this._el('state-tpl-wrap').classList.toggle('hidden', mode !== 'template');
-      this._el('state-color-wrap').classList.toggle('hidden', mode === 'none');
-      const h = this._config.header || {};
-      if (mode !== 'entity' && (h.state_entity != null || h.state_unit != null)) {
-        this._set('header.state_entity', null);
-        this._set('header.state_unit', null);
-      }
-      if (mode !== 'template' && h.state_template) this._set('header.state_template', null);
-    });
-
-    initForm('form-border', 'border', 'Border', [
-      { value: 'show', label: 'Show border' },
-      { value: 'hide', label: 'No border' },
-    ], cfg.show_border === false ? 'hide' : 'show', val => {
-      this._set('show_border', val === 'hide' ? false : null);
-    });
-  }
 }
 
 customElements.define('ha-glow-card-editor', HaGlowCardEditor);
 
+
 // ─── Card ────────────────────────────────────────────────────────────────────
 
-// Cache the loadCardHelpers() promise once — shared across all instances
 let _helpersPromise = null;
 const _getHelpers = () => (_helpersPromise ??= window.loadCardHelpers());
 
@@ -739,16 +896,14 @@ class HaGlowCard extends HTMLElement {
     this._hass = null;
     this._innerCard = null;
     this._built = false;
-    this._els = null;       // gecachte DOM-Referenzen (gesetzt in _build)
-    this._tpl = {};         // { subtitle: {unsub, active}, state: {unsub, active} }
+    this._els = null;
+    this._tpl = {};
   }
 
   disconnectedCallback() {
     this._unsubscribeTpl('subtitle');
     this._unsubscribeTpl('state');
   }
-
-  // ── Lovelace Lifecycle ───────────────────────────────────────────────────
 
   setConfig(config) {
     if (!config.card) throw new Error('ha-glow-card: "card" property is required');
@@ -771,12 +926,16 @@ class HaGlowCard extends HTMLElement {
   set hass(hass) {
     const prevHass = this._hass;
     this._hass = hass;
+
     if (!this._built) return;
+
     if (this._innerCard) this._innerCard.hass = hass;
+
     if (!prevHass && hass) {
       this._subscribeTpl('subtitle', this._config?.header?.subtitle_template, this._els.subEl, true);
-      this._subscribeTpl('state',    this._config?.header?.state_template,    this._els.stateEl, true);
+      this._subscribeTpl('state', this._config?.header?.state_template, this._els.stateEl, true);
     }
+
     this._updateHeader();
   }
 
@@ -791,6 +950,7 @@ class HaGlowCard extends HTMLElement {
     const headerRows = this._config?.header ? 1 : 0;
     const rows = inner.grid_rows != null ? inner.grid_rows + headerRows : null;
     const minRows = inner.grid_min_rows != null ? inner.grid_min_rows + headerRows : undefined;
+
     return {
       ...inner,
       grid_columns: inner.grid_columns ?? 12,
@@ -799,134 +959,147 @@ class HaGlowCard extends HTMLElement {
     };
   }
 
-  // ── DOM Aufbau ───────────────────────────────────────────────────────────
-
   _build() {
     this.shadowRoot.innerHTML = `
       <style>
-        :host { display: block; height: auto !important; }
+        :host { display:block; height:auto !important; }
 
         .tile {
-          position: relative;
-          border-radius: 12px;
-          border: 1px solid var(--divider-color, rgba(255,255,255,0.12));
-          padding: 20px 15px 15px;
-          overflow: hidden;
-          box-sizing: border-box;
-          background-color: var(--card-background-color, #1c1c1c);
-          height: auto;
+          position:relative;
+          border-radius:12px;
+          border:1px solid var(--divider-color, rgba(255,255,255,0.12));
+          padding:20px 15px 15px;
+          overflow:hidden;
+          box-sizing:border-box;
+          background-color:var(--card-background-color, #1c1c1c);
+          height:auto;
         }
 
         .tile::before {
-          content: '';
-          position: absolute;
-          inset: 0;
-          border-radius: 12px;
-          padding: 1px;
-          background: radial-gradient(
+          content:'';
+          position:absolute;
+          inset:0;
+          border-radius:12px;
+          padding:1px;
+          background:radial-gradient(
             ellipse at 40% 0%,
             var(--tile-glow-top, rgba(3,129,249,0.7)) 0%,
             rgba(255,255,255,0.08) 50%,
             rgba(255,255,255,0.0) 100%
           );
-          -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-          -webkit-mask-composite: destination-out;
-          mask-composite: exclude;
-          pointer-events: none;
-          z-index: 2;
-          display: none;
+          -webkit-mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+          -webkit-mask-composite:destination-out;
+          mask-composite:exclude;
+          pointer-events:none;
+          z-index:2;
+          display:none;
         }
-        .tile.glow-border::before { display: block; }
+
+        .tile.glow-border::before { display:block; }
 
         .gradient {
-          position: absolute;
-          inset: 0;
-          pointer-events: none;
-          z-index: 0;
+          position:absolute;
+          inset:0;
+          pointer-events:none;
+          z-index:0;
         }
 
-        .content { position: relative; z-index: 1; }
+        .content {
+          position:relative;
+          z-index:1;
+        }
 
-        /* ─ Header ─ */
         .header {
-          display: grid;
-          align-items: center;
-          margin-bottom: 12px;
+          display:grid;
+          align-items:center;
+          margin-bottom:12px;
         }
+
         .header.has-icon {
-          grid-template-areas: "icon title state";
-          grid-template-columns: 65px 1fr 120px;
+          grid-template-areas:"icon title state";
+          grid-template-columns:65px 1fr 120px;
         }
+
         .header.no-icon {
-          grid-template-areas: "title state";
-          grid-template-columns: 1fr 120px;
+          grid-template-areas:"title state";
+          grid-template-columns:1fr 120px;
         }
+
         .header.has-icon.no-state {
-          grid-template-areas: "icon title";
-          grid-template-columns: 65px 1fr;
+          grid-template-areas:"icon title";
+          grid-template-columns:65px 1fr;
         }
+
         .header.no-icon.no-state {
-          grid-template-areas: "title";
-          grid-template-columns: 1fr;
+          grid-template-areas:"title";
+          grid-template-columns:1fr;
         }
 
         .icon-area {
-          grid-area: icon;
-          display: flex;
-          align-items: center;
-          justify-content: flex-start;
+          grid-area:icon;
+          display:flex;
+          align-items:center;
+          justify-content:flex-start;
         }
+
         .icon-mask {
-          flex-shrink: 0;
-          -webkit-mask-repeat: no-repeat;
-          mask-repeat: no-repeat;
-          -webkit-mask-position: center;
-          mask-position: center;
-          -webkit-mask-size: contain;
-          mask-size: contain;
-          background-color: var(--primary-text-color);
+          flex-shrink:0;
+          -webkit-mask-repeat:no-repeat;
+          mask-repeat:no-repeat;
+          -webkit-mask-position:center;
+          mask-position:center;
+          -webkit-mask-size:contain;
+          mask-size:contain;
+          background-color:var(--primary-text-color);
         }
 
         .title-area {
-          grid-area: title;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
+          grid-area:title;
+          display:flex;
+          flex-direction:column;
+          justify-content:center;
         }
+
         .title-main {
-          font-size: clamp(20px, 2vw, 28px);
-          line-height: clamp(22px, 2vw, 33.6px);
-          font-weight: 400;
-          color: var(--primary-text-color);
-          margin: 0;
-          padding: 0;
+          font-size:clamp(20px, 2vw, 28px);
+          line-height:clamp(22px, 2vw, 33.6px);
+          font-weight:400;
+          color:var(--primary-text-color);
+          margin:0;
+          padding:0;
         }
+
         .title-sub {
-          font-size: 14px;
-          color: var(--secondary-text-color);
-          margin: 0;
-          padding: 0;
+          font-size:14px;
+          color:var(--secondary-text-color);
+          margin:0;
+          padding:0;
         }
 
         .state-area {
-          grid-area: state;
-          display: flex;
-          align-items: flex-start;
-          justify-content: flex-end;
-          align-self: start;
-        }
-        .state-value {
-          font-size: clamp(20px, 2vw, 28px);
-          line-height: clamp(22px, 2vw, 33.6px);
-          text-align: right;
-          margin: 0;
-          white-space: nowrap;
-          color: var(--primary-text-color);
+          grid-area:state;
+          display:flex;
+          align-items:flex-start;
+          justify-content:flex-end;
+          align-self:start;
         }
 
-        /* ─ Inner card ─ */
-        .inner-card { display: block; }
-        .error { color: var(--error-color, red); padding: 8px; font-size: 13px; }
+        .state-value {
+          font-size:clamp(20px, 2vw, 28px);
+          line-height:clamp(22px, 2vw, 33.6px);
+          text-align:right;
+          margin:0;
+          white-space:nowrap;
+          color:var(--primary-text-color);
+        }
+
+        .inner-card { display:block; }
+
+        .error {
+          color:var(--error-color, red);
+          padding:8px;
+          font-size:13px;
+        }
       </style>
 
       <div class="tile">
@@ -949,18 +1122,17 @@ class HaGlowCard extends HTMLElement {
       </div>
     `;
 
-    // DOM-Referenzen einmalig cachen
     this._els = {
-      tile:      this.shadowRoot.querySelector('.tile'),
-      gradient:  this.shadowRoot.querySelector('.gradient'),
+      tile: this.shadowRoot.querySelector('.tile'),
+      gradient: this.shadowRoot.querySelector('.gradient'),
       innerCard: this.shadowRoot.querySelector('.inner-card'),
-      header:    this.shadowRoot.querySelector('.header'),
-      iconArea:  this.shadowRoot.querySelector('.icon-area'),
-      iconWrap:  this.shadowRoot.querySelector('.icon-wrap'),
-      titleEl:   this.shadowRoot.querySelector('.title-main'),
-      subEl:     this.shadowRoot.querySelector('.title-sub'),
+      header: this.shadowRoot.querySelector('.header'),
+      iconArea: this.shadowRoot.querySelector('.icon-area'),
+      iconWrap: this.shadowRoot.querySelector('.icon-wrap'),
+      titleEl: this.shadowRoot.querySelector('.title-main'),
+      subEl: this.shadowRoot.querySelector('.title-sub'),
       stateArea: this.shadowRoot.querySelector('.state-area'),
-      stateEl:   this.shadowRoot.querySelector('.state-value'),
+      stateEl: this.shadowRoot.querySelector('.state-value'),
     };
 
     this._built = true;
@@ -968,10 +1140,9 @@ class HaGlowCard extends HTMLElement {
     this._createInnerCard();
   }
 
-  // ── Styling ──────────────────────────────────────────────────────────────
-
   _applyStyles() {
     if (!this._built) return;
+
     const cfg = this._config;
     const { tile, gradient, innerCard, header } = this._els;
     const rgb = cfg.accent_color ?? '3, 129, 249';
@@ -987,17 +1158,17 @@ class HaGlowCard extends HTMLElement {
       tile.style.setProperty('border', '1px solid var(--divider-color, rgba(255, 255, 255, 0.12))', 'important');
       tile.classList.remove('glow-border');
     }
+
     gradient.style.background =
       `radial-gradient(ellipse at 40% top, rgba(${rgb},0.3) 0%, rgba(${rgb},0.08) 30%, rgba(${rgb},0) 70%)`;
 
-    const margin = cfg.inner_margin ?? '0 -15px -15px';
-    innerCard.style.margin = margin;
+    innerCard.style.margin = cfg.inner_margin ?? '0 -15px -15px';
 
     if (cfg.header) {
       header.style.display = 'grid';
       this._applyHeaderStyles(cfg.header);
       this._subscribeTpl('subtitle', cfg.header.subtitle_template, this._els.subEl, true);
-      this._subscribeTpl('state',    cfg.header.state_template,    this._els.stateEl, true);
+      this._subscribeTpl('state', cfg.header.state_template, this._els.stateEl, true);
     } else {
       header.style.display = 'none';
       this._unsubscribeTpl('subtitle');
@@ -1020,8 +1191,10 @@ class HaGlowCard extends HTMLElement {
     if (h.icon_path) {
       const size = h.icon_size ?? 40;
       iconWrap.innerHTML = `<div class="icon-mask" style="
-        width:${size}px; height:${size}px;
-        -webkit-mask-image:url(${h.icon_path}); mask-image:url(${h.icon_path});
+        width:${size}px;
+        height:${size}px;
+        -webkit-mask-image:url(${h.icon_path});
+        mask-image:url(${h.icon_path});
         background-color:${h.icon_color || 'var(--primary-text-color)'};
       "></div>`;
     } else if (h.icon) {
@@ -1039,24 +1212,22 @@ class HaGlowCard extends HTMLElement {
     stateEl.style.color = h.state_color || 'var(--primary-text-color)';
   }
 
-  // ── Header data (entity values) ──────────────────────────────────────────
-
   _updateHeader() {
     if (!this._built || !this._config?.header || !this._hass) return;
+
     const h = this._config.header;
     const { subEl, stateEl } = this._els;
 
-    // Subtitle: subtitle_template → written directly by WebSocket subscription
     if (h.subtitle_template) {
       subEl.style.color = h.subtitle_color || 'var(--secondary-text-color)';
     } else {
       subEl.textContent = '';
     }
 
-    // State value: state_template → written by subscription; state_entity → resolved here
     if (!h.state_template && h.state_entity) {
       const s = this._hass.states[h.state_entity];
       let text;
+
       if (s) {
         const decimals = h.state_decimals ?? 0;
         const num = parseFloat(s.state);
@@ -1066,13 +1237,12 @@ class HaGlowCard extends HTMLElement {
       } else {
         text = '—';
       }
+
       if (stateEl.textContent !== text) stateEl.textContent = text;
     } else if (!h.state_template) {
       if (stateEl.textContent !== '') stateEl.textContent = '';
     }
   }
-
-  // ── HA Jinja2-Template Subscription ─────────────────────────────────────
 
   _unsubscribeTpl(key) {
     const t = this._tpl[key];
@@ -1083,16 +1253,24 @@ class HaGlowCard extends HTMLElement {
   }
 
   async _subscribeTpl(key, template, el, useHTML = false) {
-    if (!template) { this._unsubscribeTpl(key); return; }
+    if (!template) {
+      this._unsubscribeTpl(key);
+      return;
+    }
+
     if (template === this._tpl[key]?.active) return;
+
     this._unsubscribeTpl(key);
+
     if (!this._hass?.connection) return;
 
     this._tpl[key] = { active: template };
+
     try {
       this._tpl[key].unsub = await this._hass.connection.subscribeMessage(
         msg => {
           if (!el) return;
+
           if (msg.result !== undefined) {
             if (useHTML) el.innerHTML = msg.result.trim();
             else el.textContent = msg.result.trim();
@@ -1101,22 +1279,28 @@ class HaGlowCard extends HTMLElement {
             console.error(`ha-glow-card ${key} template:`, msg.error);
           }
         },
-        { type: 'render_template', template, variables: {}, report_errors: true }
+        {
+          type: 'render_template',
+          template,
+          variables: {},
+          report_errors: true,
+        }
       );
     } catch (err) {
-      console.error(`ha-glow-card: Template-Subscription (${key}) fehlgeschlagen`, err);
+      console.error(`ha-glow-card: Template subscription (${key}) failed`, err);
       if (el) el.textContent = `⚠ Template error: ${err.message}`;
       this._tpl[key].active = null;
     }
   }
 
-  // ── Inner card ───────────────────────────────────────────────────────────
-
   async _createInnerCard() {
     const slot = this._els?.innerCard ?? this.shadowRoot.querySelector('.inner-card');
     if (!slot) return;
+
     while (slot.firstChild) slot.removeChild(slot.firstChild);
+
     this._innerCard = null;
+
     if (!this._config?.card) return;
 
     try {
@@ -1124,19 +1308,21 @@ class HaGlowCard extends HTMLElement {
       const card = helpers.createCardElement(this._config.card);
 
       if (this._hass) card.hass = this._hass;
+
       this._innerCard = card;
       slot.appendChild(card);
 
       const injectStyles = () => {
         const root = card.shadowRoot;
         if (!root) return;
-        // Reset outer card visuals via scoped CSS — NOT via CSS variables (those cascade to child cards)
+
         if (!root.querySelector('#glow-outer-reset')) {
           const s = document.createElement('style');
           s.id = 'glow-outer-reset';
           s.textContent = 'ha-card{background:transparent!important;box-shadow:none!important;border:none!important;border-radius:0!important;}';
           root.appendChild(s);
         }
+
         if (this._config.extra_styles && !root.querySelector('#glow-extra-styles')) {
           const s = document.createElement('style');
           s.id = 'glow-extra-styles';
@@ -1144,10 +1330,12 @@ class HaGlowCard extends HTMLElement {
           root.appendChild(s);
         }
       };
+
       if (card.shadowRoot) injectStyles();
       else requestAnimationFrame(injectStyles);
     } catch (err) {
       console.error('ha-glow-card: Failed to create inner card', err);
+
       const errEl = document.createElement('div');
       errEl.className = 'error';
       errEl.textContent = `Error: ${err.message}`;
@@ -1167,7 +1355,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c HA-GLOW-CARD %c v1.0.2',
+  '%c HA-GLOW-CARD %c v1.0.3',
   'color:#fff;background:#0381f9;font-weight:700;padding:2px 4px;border-radius:3px 0 0 3px;',
   'color:#0381f9;background:#1c1c1c;font-weight:400;padding:2px 4px;border-radius:0 3px 3px 0;border:1px solid #0381f9;'
 );

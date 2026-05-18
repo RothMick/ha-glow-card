@@ -249,6 +249,11 @@ accent_color: "150, 150, 150"
 
 ## Changelog
 
+### v1.0.3
+- **Fix** — Visual editor now works correctly on iOS and Safari. All inputs replaced with native `ha-form` elements; text field changes are buffered and only saved on focus-out so WebKit does not re-render the editor on every keystroke
+- **Improvement** — Color fields now show proper labels (e.g. "Title color", "Glow color") instead of raw key names
+- **Improvement** — Border option in the editor now exposes all three states: show, hide, and glow border
+
 ### v1.0.2
 - **Fix** — Inner cards of stacked containers (e.g. `vertical-stack`) now keep their own background, border, and border-radius. Previously, ha-glow-card used CSS custom properties to suppress the outer card's frame, but those cascade through shadow DOM into nested cards. Replaced with scoped shadow-DOM style injection that only affects the direct outer card.
 
