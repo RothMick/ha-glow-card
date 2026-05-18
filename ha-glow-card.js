@@ -1405,7 +1405,7 @@ customElements.define('ha-glow-card', HaGlowCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'ha-glow-card',
-  name: 'HA Glow Card',
+  name: 'Glow Card',
   description: 'Styled tile container with glow/gradient background, header, icon, subtitle, and embedded card',
   preview: true,
 });
