@@ -1,5 +1,5 @@
 /**
- * ha-glow-card v1.0.4
+ * ha-glow-card v1.0.6
  * Editor rebuilt closer to energy-flow-card style:
  * - all inputs via ha-form
  * - fewer direct ha-textfield / picker elements
@@ -951,9 +951,21 @@ class HaGlowCard extends HTMLElement {
     this._config = null;
     this._hass = null;
     this._innerCard = null;
+    this._innerCardObserver = null;
     this._built = false;
     this._els = null;
     this._tpl = {};
+  }
+
+  connectedCallback() {
+    // Re-subscribe templates after the card is moved in the DOM (HA relayout,
+    // drag, tab switch). disconnectedCallback tore the subscriptions down and
+    // `set hass` only subscribes on the first hass, so without this the
+    // subtitle/state templates would stay frozen after a reconnect.
+    if (this._built && this._hass && this._config?.header) {
+      this._subscribeTpl('subtitle', this._config.header.subtitle_template, this._els.subEl, true);
+      this._subscribeTpl('state', this._config.header.state_template, this._els.stateEl, true);
+    }
   }
 
   disconnectedCallback() {
@@ -1149,17 +1161,15 @@ class HaGlowCard extends HTMLElement {
           color:var(--primary-text-color);
         }
 
-        /* Neutralize the embedded card's own ha-card chrome via inherited HA
-           card variables. Set on the wrapper (not injected into the inner
-           card's shadow root) so it survives inner cards that rebuild their
-           whole shadowRoot on every render. */
+        /* The embedded card's ha-card chrome is neutralized by a scoped
+           <style> injected into the inner card's shadow root (see
+           _neutralizeInnerCard). We intentionally do NOT set --ha-card-*
+           custom properties here: CSS variables inherit through every
+           shadow-DOM boundary, so they would also strip the chrome of cards
+           nested inside an embedded stack (level 2+). Scoped styles only reach
+           level 1 — exactly the glow-through behaviour we want. */
         .inner-card {
           display:block;
-          --ha-card-background:transparent;
-          --ha-card-box-shadow:none;
-          --ha-card-border-width:0px;
-          --ha-card-border-color:transparent;
-          --ha-card-border-radius:0;
         }
 
         .error {
@@ -1313,10 +1323,11 @@ class HaGlowCard extends HTMLElement {
 
   _unsubscribeTpl(key) {
     const t = this._tpl[key];
-    if (t?.unsub) {
-      t.unsub();
-      this._tpl[key] = {};
-    }
+    if (t?.unsub) t.unsub();
+    // Always clear the slot (active + token), even when no unsub is stored yet:
+    // an in-flight subscribe then sees its token is gone and self-cancels on
+    // resolve instead of leaking a subscription or stealing a newer one's slot.
+    this._tpl[key] = {};
   }
 
   async _subscribeTpl(key, template, el, useHTML = false) {
@@ -1331,10 +1342,14 @@ class HaGlowCard extends HTMLElement {
 
     if (!this._hass?.connection) return;
 
-    this._tpl[key] = { active: template };
+    // Token identifies this subscribe attempt. If the slot's token changes
+    // while we await (rapid template switch, or a disconnect), the resolved
+    // subscription is stale and must be torn down instead of stored.
+    const token = {};
+    this._tpl[key] = { active: template, token };
 
     try {
-      this._tpl[key].unsub = await this._hass.connection.subscribeMessage(
+      const unsub = await this._hass.connection.subscribeMessage(
         msg => {
           if (!el) return;
 
@@ -1353,16 +1368,68 @@ class HaGlowCard extends HTMLElement {
           report_errors: true,
         }
       );
+
+      if (this._tpl[key]?.token === token) {
+        this._tpl[key].unsub = unsub;
+      } else {
+        unsub();
+      }
     } catch (err) {
       console.error(`ha-glow-card: Template subscription (${key}) failed`, err);
       if (el) el.textContent = `⚠ Template error: ${err.message}`;
-      this._tpl[key].active = null;
+      if (this._tpl[key]?.token === token) this._tpl[key].active = null;
     }
+  }
+
+  /**
+   * Strip the embedded card's own ha-card chrome so the glow shows through —
+   * but only at level 1. A scoped <style> in the inner card's shadow root
+   * matches just that root's ha-card; cards nested inside an embedded stack
+   * live in deeper shadow roots and keep their chrome. A MutationObserver
+   * re-injects the style for inner cards that rebuild their whole shadow root
+   * on render (Lit cards keep it; some plain-DOM cards strip it each render).
+   */
+  _neutralizeInnerCard(card) {
+    const root = card.shadowRoot;
+    if (!root) {
+      requestAnimationFrame(() => {
+        if (this._innerCard === card) this._neutralizeInnerCard(card);
+      });
+      return;
+    }
+
+    const inject = () => {
+      if (!root.querySelector('#glow-outer-reset')) {
+        const s = document.createElement('style');
+        s.id = 'glow-outer-reset';
+        s.textContent = 'ha-card{background:transparent!important;box-shadow:none!important;border:none!important;border-radius:0!important;}';
+        root.appendChild(s);
+      }
+
+      if (this._config.extra_styles && !root.querySelector('#glow-extra-styles')) {
+        const s = document.createElement('style');
+        s.id = 'glow-extra-styles';
+        s.textContent = this._config.extra_styles;
+        root.appendChild(s);
+      }
+    };
+
+    inject();
+
+    // Re-inject when the inner card replaces its shadow-root children on render.
+    // inject() is idempotent, so the mutation it triggers itself is a no-op.
+    this._innerCardObserver = new MutationObserver(inject);
+    this._innerCardObserver.observe(root, { childList: true });
   }
 
   async _createInnerCard() {
     const slot = this._els?.innerCard ?? this.shadowRoot.querySelector('.inner-card');
     if (!slot) return;
+
+    if (this._innerCardObserver) {
+      this._innerCardObserver.disconnect();
+      this._innerCardObserver = null;
+    }
 
     while (slot.firstChild) slot.removeChild(slot.firstChild);
 
@@ -1379,27 +1446,7 @@ class HaGlowCard extends HTMLElement {
       this._innerCard = card;
       slot.appendChild(card);
 
-      const injectStyles = () => {
-        const root = card.shadowRoot;
-        if (!root) return;
-
-        if (!root.querySelector('#glow-outer-reset')) {
-          const s = document.createElement('style');
-          s.id = 'glow-outer-reset';
-          s.textContent = 'ha-card{background:transparent!important;box-shadow:none!important;border:none!important;border-radius:0!important;}';
-          root.appendChild(s);
-        }
-
-        if (this._config.extra_styles && !root.querySelector('#glow-extra-styles')) {
-          const s = document.createElement('style');
-          s.id = 'glow-extra-styles';
-          s.textContent = this._config.extra_styles;
-          root.appendChild(s);
-        }
-      };
-
-      if (card.shadowRoot) injectStyles();
-      else requestAnimationFrame(injectStyles);
+      this._neutralizeInnerCard(card);
     } catch (err) {
       console.error('ha-glow-card: Failed to create inner card', err);
 
@@ -1422,7 +1469,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c HA-GLOW-CARD %c v1.0.4',
+  '%c HA-GLOW-CARD %c v1.0.6',
   'color:#fff;background:#0381f9;font-weight:700;padding:2px 4px;border-radius:3px 0 0 3px;',
   'color:#0381f9;background:#1c1c1c;font-weight:400;padding:2px 4px;border-radius:0 3px 3px 0;border:1px solid #0381f9;'
 );
