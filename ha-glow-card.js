@@ -1149,7 +1149,18 @@ class HaGlowCard extends HTMLElement {
           color:var(--primary-text-color);
         }
 
-        .inner-card { display:block; }
+        /* Neutralize the embedded card's own ha-card chrome via inherited HA
+           card variables. Set on the wrapper (not injected into the inner
+           card's shadow root) so it survives inner cards that rebuild their
+           whole shadowRoot on every render. */
+        .inner-card {
+          display:block;
+          --ha-card-background:transparent;
+          --ha-card-box-shadow:none;
+          --ha-card-border-width:0px;
+          --ha-card-border-color:transparent;
+          --ha-card-border-radius:0;
+        }
 
         .error {
           color:var(--error-color, red);
