@@ -1,10 +1,17 @@
 /**
- * ha-glow-card v1.0.6
+ * ha-glow-card v1.0.7
  * Editor rebuilt closer to energy-flow-card style:
  * - all inputs via ha-form
  * - fewer direct ha-textfield / picker elements
  * - text changes are buffered so iOS/WebKit does not re-render on every keystroke
  */
+
+const DEFAULT_ACCENT = '3, 129, 249';
+const RGB_TRIPLE = /^\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*$/;
+
+const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c => (
+  { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
+));
 
 class HaGlowCardEditor extends HTMLElement {
   constructor() {
@@ -18,6 +25,7 @@ class HaGlowCardEditor extends HTMLElement {
     this._activeTab = 'container';
     this._iconModeOverride = null;
     this._stateModeOverride = null;
+    this._subModeOverride = null;
     this._mainEditing = false;
     this._pending = null;
   }
@@ -40,6 +48,7 @@ class HaGlowCardEditor extends HTMLElement {
     const h = this._config.header || {};
     if (h.icon || h.icon_path) this._iconModeOverride = null;
     if (h.state_entity || h.state_template) this._stateModeOverride = null;
+    if (h.subtitle_template) this._subModeOverride = null;
 
     if (
       this._activeTab === 'embedded' &&
@@ -169,7 +178,8 @@ class HaGlowCardEditor extends HTMLElement {
 
   _subtitleMode() {
     const h = this._config.header || {};
-    return h.subtitle_template ? 'template' : 'none';
+    if (h.subtitle_template) return 'template';
+    return this._subModeOverride || 'none';
   }
 
   _stateMode() {
@@ -204,6 +214,17 @@ class HaGlowCardEditor extends HTMLElement {
     return null;
   }
 
+  // Best-effort hex for the swatch / native picker. Named colors and var()
+  // have no static hex and return null (swatch shows "no color").
+  _colorToHex(val) {
+    const v = String(val || '').trim();
+    if (/^#[0-9a-f]{6}$/i.test(v)) return v.toLowerCase();
+    const m3 = v.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i);
+    if (m3) return ('#' + m3[1] + m3[1] + m3[2] + m3[2] + m3[3] + m3[3]).toLowerCase();
+    if (RGB_TRIPLE.test(v) || /^rgba?\(/i.test(v)) return this._rgbToHex(v);
+    return null;
+  }
+
   _parseMargin(str) {
     const p = (str || '0 -15px -15px').trim().split(/\s+/);
     if (p.length === 1) return { t: p[0], r: p[0], b: p[0], l: p[0] };
@@ -213,7 +234,13 @@ class HaGlowCardEditor extends HTMLElement {
   }
 
   _composeMarginFromForm(v) {
-    return `${v.margin_top || '0'} ${v.margin_right || '0'} ${v.margin_bottom || '0'} ${v.margin_left || '0'}`;
+    // Unitless non-zero numbers ("10", "-15") are invalid CSS margins — assume px.
+    const part = x => {
+      const s = String(x ?? '').trim();
+      if (!s) return '0';
+      return /^-?\d*\.?\d+$/.test(s) && Number(s) !== 0 ? `${s}px` : s;
+    };
+    return ['margin_top', 'margin_right', 'margin_bottom', 'margin_left'].map(k => part(v[k])).join(' ');
   }
 
   _render() {
@@ -239,7 +266,7 @@ class HaGlowCardEditor extends HTMLElement {
         <div id="sub-tpl-wrap" class="field ${subMode !== 'template' ? 'hidden' : ''}">
           <label>Jinja2 template</label>
           <textarea id="subtitle_template" placeholder="{{ (states('sensor.abc') | int) }} W"></textarea>
-          <div class="hint">Evaluated server-side. HTML in the output is rendered.</div>
+          <div class="hint">Evaluated server-side. Basic HTML in the output (e.g. &lt;span style&gt;) is rendered; scripts and event handlers are stripped.</div>
         </div>
         <div id="sub-color-wrap" class="field ${subMode !== 'template' ? 'hidden' : ''}">
           ${this._colorFieldHtml('subtitle_color', 'Subtitle color', 'var(--secondary-text-color)')}
@@ -268,14 +295,17 @@ class HaGlowCardEditor extends HTMLElement {
         <div id="state-tpl-wrap" class="field ${stateMode !== 'template' ? 'hidden' : ''}">
           <label>Jinja2 template</label>
           <textarea id="state_template" placeholder="{{ (states('sensor.abc') | int) }} W"></textarea>
-          <div class="hint">Evaluated server-side. The output text is shown directly.</div>
+          <div class="hint">Evaluated server-side. Basic HTML in the output (e.g. &lt;span style&gt;) is rendered; scripts and event handlers are stripped.</div>
         </div>
         <div id="state-color-wrap" class="field ${stateMode === 'none' ? 'hidden' : ''}">
           ${this._colorFieldHtml('state_color', 'Value color', 'var(--primary-text-color)')}
         </div>
 
         <div class="section">Tile Settings</div>
-        <div class="field">${this._colorFieldHtml('accent_color', 'Glow color', '#0381f9', true)}</div>
+        <div class="field">
+          ${this._colorFieldHtml('accent_color', 'Glow color', '#0381f9', true)}
+          <div class="hint">Any CSS color: #hex, r, g, b, rgb(), hsl(), names or var(--…).</div>
+        </div>
         <ha-form id="form-margin"></ha-form>
         <div class="hint">Inner card margin. Negative values stretch the card to the container edges.</div>
         <ha-form id="form-border"></ha-form>
@@ -473,6 +503,7 @@ class HaGlowCardEditor extends HTMLElement {
       { sub_mode:this._subtitleMode() },
       v => {
         const mode = v.sub_mode;
+        this._subModeOverride = mode === 'none' ? null : mode;
         this._el('sub-tpl-wrap')?.classList.toggle('hidden', mode !== 'template');
         this._el('sub-color-wrap')?.classList.toggle('hidden', mode !== 'template');
         if (mode !== 'template') this._mergeHeader({ subtitle_template:null, subtitle_color:null }, true);
@@ -614,7 +645,7 @@ class HaGlowCardEditor extends HTMLElement {
     this._setupColorForm('subtitle_color', h.subtitle_color || '', false, val => this._mergeHeader({ subtitle_color:val }, false), 'Subtitle color');
     this._setupColorForm('icon_color', h.icon_color || '', false, val => this._mergeHeader({ icon_color:val }, false), 'Icon color');
     this._setupColorForm('state_color', h.state_color || '', false, val => this._mergeHeader({ state_color:val }, false), 'Value color');
-    this._setupColorForm('accent_color', cfg.accent_color || '3, 129, 249', true, val => this._mergeRoot({ accent_color:val }, false), 'Glow color');
+    this._setupColorForm('accent_color', cfg.accent_color || DEFAULT_ACCENT, true, val => this._mergeRoot({ accent_color:val }, false), 'Glow color');
   }
 
   _setupForm(id, schema, data, onChange, buffered = true) {
@@ -644,7 +675,8 @@ class HaGlowCardEditor extends HTMLElement {
     const form = this._el(`form-color-${id}`);
     if (!form) return;
 
-    const shown = isRgb ? (this._rgbToHex(value) || '') : (value || '');
+    // Legacy "r, g, b" accent values are shown as hex; anything else as typed.
+    const shown = isRgb && RGB_TRIPLE.test(value || '') ? (this._rgbToHex(value) || value) : (value || '');
 
     form.hass = this._hass;
     form.schema = [{ name:id, label:label || id.replace(/_/g, ' '), selector:{ text:{} } }];
@@ -655,7 +687,7 @@ class HaGlowCardEditor extends HTMLElement {
       const raw = ev.detail.value?.[id] || '';
       const store = isRgb ? (this._toRgb(raw) || raw) : raw;
       onChange(store);
-      this._syncColorPicker(id, raw, isRgb);
+      this._syncColorPicker(id, raw);
     });
 
     form.addEventListener('focusout', () => {
@@ -673,16 +705,15 @@ class HaGlowCardEditor extends HTMLElement {
     if (state) state.value = h.state_template || '';
 
     ['title_color', 'subtitle_color', 'icon_color', 'state_color'].forEach(id => {
-      const val = h[id] || '';
-      const hex = /^#[0-9a-fA-F]{6}$/.test(val) ? val : '';
+      const hex = this._colorToHex(h[id]) || '';
       const picker = this._el(`${id}-picker`);
       if (picker) picker.value = hex || '#ffffff';
       this._updateColorSwatch(id, hex);
     });
 
-    const accentHex = this._rgbToHex(this._config.accent_color || '3, 129, 249') || '#0381f9';
+    const accentHex = this._colorToHex(this._config.accent_color || DEFAULT_ACCENT) || '';
     const accentPicker = this._el('accent_color-picker');
-    if (accentPicker) accentPicker.value = accentHex;
+    if (accentPicker) accentPicker.value = accentHex || '#0381f9';
     this._updateColorSwatch('accent_color', accentHex);
   }
 
@@ -724,11 +755,11 @@ class HaGlowCardEditor extends HTMLElement {
     });
   }
 
-  _syncColorPicker(id, raw, isRgb) {
+  _syncColorPicker(id, raw) {
     const picker = this._el(`${id}-picker`);
     if (!picker) return;
-    const hex = isRgb ? this._rgbToHex(raw) : raw;
-    if (/^#[0-9a-fA-F]{6}$/.test(hex)) picker.value = hex;
+    const hex = this._colorToHex(raw);
+    if (hex) picker.value = hex;
     this._updateColorSwatch(id, hex || '');
   }
 
@@ -835,9 +866,9 @@ class HaGlowCardEditor extends HTMLElement {
     const listEl = container.querySelector('#fp-list');
     if (listEl) {
       listEl.innerHTML = customCards.map(c => `
-        <div class="fp-item" data-type="${c.type}">
-          <div style="font-size:13px;font-weight:500;">${c.name}</div>
-          <div class="fp-sub">${c.type}</div>
+        <div class="fp-item" data-type="${escapeHtml(c.type)}">
+          <div style="font-size:13px;font-weight:500;">${escapeHtml(c.name)}</div>
+          <div class="fp-sub">${escapeHtml(c.type)}</div>
         </div>
       `).join('');
 
@@ -916,7 +947,8 @@ class HaGlowCardEditor extends HTMLElement {
 
       this._cardEditor = editor;
     } catch (err) {
-      slot.innerHTML = `<div style="color:var(--error-color,red);font-size:13px;padding:8px;">${err.message}</div>`;
+      slot.innerHTML = '<div style="color:var(--error-color,red);font-size:13px;padding:8px;"></div>';
+      slot.firstChild.textContent = err.message;
     }
   }
 }
@@ -929,6 +961,82 @@ customElements.define('ha-glow-card-editor', HaGlowCardEditor);
 let _helpersPromise = null;
 const _getHelpers = () => (_helpersPromise ??= window.loadCardHelpers());
 
+const SUPPORTS_COLOR_MIX = typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
+  && CSS.supports('color', 'color-mix(in srgb, red 50%, transparent)');
+
+// Template output is rendered as HTML so users can color parts of it
+// (<span style="color:…">). Templates can print foreign strings (calendar
+// titles, media titles), so only an allowlist of formatting markup survives:
+// no scripts, no event handlers, no frames, no links.
+const HTML_ALLOWED_TAGS = new Set([
+  'B', 'STRONG', 'I', 'EM', 'U', 'S', 'SMALL', 'BIG', 'SUB', 'SUP', 'BR',
+  'SPAN', 'DIV', 'P', 'FONT', 'MARK', 'CODE', 'HA-ICON', 'IMG',
+]);
+const HTML_DROPPED_TAGS = new Set([
+  'SCRIPT', 'STYLE', 'IFRAME', 'FRAME', 'FRAMESET', 'OBJECT', 'EMBED', 'TEMPLATE',
+  'NOSCRIPT', 'TEXTAREA', 'TITLE', 'SVG', 'MATH', 'LINK', 'META', 'BASE',
+  'FORM', 'INPUT', 'BUTTON', 'SELECT',
+]);
+const HTML_ALLOWED_ATTRS = new Set(['style', 'class', 'title', 'color', 'icon', 'src', 'alt', 'width', 'height']);
+
+const sanitizeHtml = html => {
+  // <template> content is inert: nothing loads or runs while we clean it.
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+
+  const clean = parent => {
+    for (const node of [...parent.childNodes]) {
+      if (node.nodeType === Node.TEXT_NODE) continue;
+      if (node.nodeType !== Node.ELEMENT_NODE) { node.remove(); continue; }
+
+      const tag = node.tagName.toUpperCase();
+      if (HTML_DROPPED_TAGS.has(tag)) { node.remove(); continue; }
+
+      clean(node);
+
+      // Unknown but harmless tags (<a>, <table>, …) are unwrapped to their text.
+      if (!HTML_ALLOWED_TAGS.has(tag)) { node.replaceWith(...node.childNodes); continue; }
+
+      for (const { name, value } of [...node.attributes]) {
+        const n = name.toLowerCase();
+        const badSrc = n === 'src' && !/^(https?:\/\/|\/(?!\/))/i.test(value.trim());
+        if (!HTML_ALLOWED_ATTRS.has(n) || badSrc) node.removeAttribute(name);
+      }
+    }
+  };
+
+  clean(tpl.content);
+  return tpl.content;
+};
+
+// Mirrors HA's numberFormatToLocale() so the value matches the user's
+// number format setting (profile → number format).
+const _numberFormats = new Map();
+const formatNumber = (num, decimals, locale) => {
+  const fmt = locale?.number_format;
+  if (fmt === 'none') return num.toFixed(decimals);
+
+  const lang =
+    fmt === 'comma_decimal' ? ['en-US', 'en'] :
+    fmt === 'decimal_comma' ? ['de', 'es', 'it'] :
+    fmt === 'space_comma' ? ['fr', 'sv', 'cs'] :
+    fmt === 'system' ? undefined :
+    locale?.language;
+
+  const key = `${lang}|${decimals}`;
+  let nf = _numberFormats.get(key);
+  if (!nf) {
+    const opts = { minimumFractionDigits: decimals, maximumFractionDigits: decimals };
+    try {
+      nf = new Intl.NumberFormat(lang, opts);
+    } catch {
+      nf = new Intl.NumberFormat(undefined, opts);
+    }
+    _numberFormats.set(key, nf);
+  }
+  return nf.format(num);
+};
+
 class HaGlowCard extends HTMLElement {
   static getConfigElement() {
     return document.createElement('ha-glow-card-editor');
@@ -936,7 +1044,7 @@ class HaGlowCard extends HTMLElement {
 
   static getStubConfig() {
     return {
-      accent_color: '3, 129, 249',
+      accent_color: DEFAULT_ACCENT,
       header: {
         title: 'My Tile',
       },
@@ -951,10 +1059,15 @@ class HaGlowCard extends HTMLElement {
     this._config = null;
     this._hass = null;
     this._innerCard = null;
+    this._innerRoot = null;
     this._innerCardObserver = null;
+    this._innerGen = 0;
+    this._innerReady = Promise.resolve();
     this._built = false;
     this._els = null;
     this._tpl = {};
+    this._stateCache = {};
+    this._badAccent = null;
   }
 
   connectedCallback() {
@@ -978,6 +1091,7 @@ class HaGlowCard extends HTMLElement {
 
     const prevCardCfg = this._config?.card;
     this._config = config;
+    this._stateCache = {};
 
     if (!this._built) {
       this._build();
@@ -1007,12 +1121,33 @@ class HaGlowCard extends HTMLElement {
     this._updateHeader();
   }
 
-  getCardSize() {
-    const innerSize = this._innerCard?.getCardSize?.() ?? 3;
+  // Masonry view. Inner cards may answer with a Promise (e.g. vertical-stack),
+  // and the inner card itself is created asynchronously.
+  async getCardSize() {
     const headerRows = this._config?.header ? 1 : 0;
-    return innerSize + headerRows;
+
+    let ready;
+    do {
+      ready = this._innerReady;
+      await ready;
+    } while (ready !== this._innerReady);
+
+    let size = 3;
+    try {
+      const inner = await this._innerCard?.getCardSize?.();
+      if (Number.isFinite(inner)) size = inner;
+    } catch {
+      // keep default
+    }
+    return size + headerRows;
   }
 
+  // Sections view (HA 2024.11+): full section width, height follows content.
+  getGridOptions() {
+    return { columns: 12, rows: 'auto' };
+  }
+
+  // Legacy sections API, only used by HA < 2024.11.
   getLayoutOptions() {
     const inner = this._innerCard?.getLayoutOptions?.() ?? { grid_columns: 12, grid_rows: null };
     const headerRows = this._config?.header ? 1 : 0;
@@ -1083,24 +1218,26 @@ class HaGlowCard extends HTMLElement {
           margin-bottom:12px;
         }
 
+        /* The value column sizes to its content, so long values ("12.345 kWh")
+           push the title instead of overflowing into it. */
         .header.has-icon {
           grid-template-areas:"icon title state";
-          grid-template-columns:65px 1fr 120px;
+          grid-template-columns:65px minmax(0, 1fr) auto;
         }
 
         .header.no-icon {
           grid-template-areas:"title state";
-          grid-template-columns:1fr 120px;
+          grid-template-columns:minmax(0, 1fr) auto;
         }
 
         .header.has-icon.no-state {
           grid-template-areas:"icon title";
-          grid-template-columns:65px 1fr;
+          grid-template-columns:65px minmax(0, 1fr);
         }
 
         .header.no-icon.no-state {
           grid-template-areas:"title";
-          grid-template-columns:1fr;
+          grid-template-columns:minmax(0, 1fr);
         }
 
         .icon-area {
@@ -1126,6 +1263,7 @@ class HaGlowCard extends HTMLElement {
           display:flex;
           flex-direction:column;
           justify-content:center;
+          overflow-wrap:anywhere;
         }
 
         .title-main {
@@ -1150,6 +1288,7 @@ class HaGlowCard extends HTMLElement {
           align-items:flex-start;
           justify-content:flex-end;
           align-self:start;
+          padding-left:12px;
         }
 
         .state-value {
@@ -1170,6 +1309,15 @@ class HaGlowCard extends HTMLElement {
            level 1 — exactly the glow-through behaviour we want. */
         .inner-card {
           display:block;
+        }
+
+        /* Light-DOM inner cards (no shadow root) keep their ha-card in our own
+           shadow tree, so a plain selector reaches it — still level 1 only. */
+        .inner-card > * > ha-card {
+          background:transparent !important;
+          box-shadow:none !important;
+          border:none !important;
+          border-radius:0 !important;
         }
 
         .error {
@@ -1217,19 +1365,44 @@ class HaGlowCard extends HTMLElement {
     this._createInnerCard();
   }
 
+  // accent_color accepts the legacy "r, g, b" triple or any CSS color
+  // (#hex, rgb(), hsl(), names, var(--…)). Invalid values fall back to the
+  // default instead of silently dropping the glow.
+  _accent() {
+    const raw = String(this._config.accent_color ?? DEFAULT_ACCENT).trim();
+    if (RGB_TRIPLE.test(raw)) return { triple: raw, css: `rgb(${raw})` };
+
+    const valid = raw && (typeof CSS === 'undefined' || typeof CSS.supports !== 'function'
+      || CSS.supports('color', raw));
+    if (valid) return { triple: null, css: raw };
+
+    if (this._badAccent !== raw) {
+      this._badAccent = raw;
+      console.warn(`ha-glow-card: invalid accent_color "${raw}", using default`);
+    }
+    return { triple: DEFAULT_ACCENT, css: `rgb(${DEFAULT_ACCENT})` };
+  }
+
+  _tint(accent, alpha) {
+    // Triples keep the exact pre-1.0.7 output.
+    if (accent.triple) return `rgba(${accent.triple}, ${alpha})`;
+    if (SUPPORTS_COLOR_MIX) return `color-mix(in srgb, ${accent.css} ${Math.round(alpha * 100)}%, transparent)`;
+    return accent.css;
+  }
+
   _applyStyles() {
     if (!this._built) return;
 
     const cfg = this._config;
     const { tile, gradient, innerCard, header } = this._els;
-    const rgb = cfg.accent_color ?? '3, 129, 249';
+    const accent = this._accent();
 
     if (cfg.show_border === false) {
       tile.style.setProperty('border', '0px', 'important');
       tile.classList.remove('glow-border');
     } else if (cfg.border_glow === true) {
       tile.style.setProperty('border', '0px', 'important');
-      tile.style.setProperty('--tile-glow-top', `rgba(${rgb}, 0.35)`);
+      tile.style.setProperty('--tile-glow-top', this._tint(accent, 0.35));
       tile.classList.add('glow-border');
     } else {
       tile.style.setProperty('border', '1px solid var(--divider-color, rgba(255, 255, 255, 0.12))', 'important');
@@ -1237,9 +1410,12 @@ class HaGlowCard extends HTMLElement {
     }
 
     gradient.style.background =
-      `radial-gradient(ellipse at 40% top, rgba(${rgb},0.3) 0%, rgba(${rgb},0.08) 30%, rgba(${rgb},0) 70%)`;
+      `radial-gradient(ellipse at 40% top, ${this._tint(accent, 0.3)} 0%, ${this._tint(accent, 0.08)} 30%, ${this._tint(accent, 0)} 70%)`;
 
     innerCard.style.margin = cfg.inner_margin ?? '0 -15px -15px';
+
+    // extra_styles may have changed without the inner card being rebuilt.
+    this._syncInnerStyles();
 
     if (cfg.header) {
       header.style.display = 'grid';
@@ -1254,7 +1430,7 @@ class HaGlowCard extends HTMLElement {
   }
 
   _applyHeaderStyles(h) {
-    const { header, iconArea, iconWrap, titleEl, stateArea, stateEl } = this._els;
+    const { header, iconArea, iconWrap, titleEl, subEl, stateArea, stateEl } = this._els;
 
     const hasIcon = !!(h.icon || h.icon_path);
     header.classList.toggle('has-icon', hasIcon);
@@ -1265,60 +1441,90 @@ class HaGlowCard extends HTMLElement {
     header.classList.toggle('no-state', !hasState);
     stateArea.style.display = hasState ? 'flex' : 'none';
 
+    // Built via DOM APIs: config values never pass through an HTML parser.
+    const size = Number(h.icon_size) || 40;
+    const iconColor = h.icon_color || 'var(--primary-text-color)';
+    iconWrap.replaceChildren();
+
     if (h.icon_path) {
-      const size = h.icon_size ?? 40;
-      iconWrap.innerHTML = `<div class="icon-mask" style="
-        width:${size}px;
-        height:${size}px;
-        -webkit-mask-image:url(${h.icon_path});
-        mask-image:url(${h.icon_path});
-        background-color:${h.icon_color || 'var(--primary-text-color)'};
-      "></div>`;
+      const url = `url("${String(h.icon_path).replace(/[\r\n]/g, '').replace(/["\\]/g, '\\$&')}")`;
+      const mask = document.createElement('div');
+      mask.className = 'icon-mask';
+      mask.style.width = `${size}px`;
+      mask.style.height = `${size}px`;
+      mask.style.setProperty('-webkit-mask-image', url);
+      mask.style.setProperty('mask-image', url);
+      mask.style.backgroundColor = iconColor;
+      iconWrap.appendChild(mask);
     } else if (h.icon) {
-      const size = h.icon_size ?? 40;
-      iconWrap.innerHTML = `<ha-icon icon="${h.icon}" style="
-        --mdc-icon-size:${size}px;
-        color:${h.icon_color || 'var(--primary-text-color)'};
-      "></ha-icon>`;
-    } else {
-      iconWrap.innerHTML = '';
+      const icon = document.createElement('ha-icon');
+      icon.setAttribute('icon', h.icon);
+      icon.style.setProperty('--mdc-icon-size', `${size}px`);
+      icon.style.color = iconColor;
+      iconWrap.appendChild(icon);
     }
 
     titleEl.textContent = h.title ?? '';
     titleEl.style.color = h.title_color || 'var(--primary-text-color)';
+
+    subEl.style.color = h.subtitle_color || 'var(--secondary-text-color)';
+    if (!h.subtitle_template) subEl.textContent = '';
+
     stateEl.style.color = h.state_color || 'var(--primary-text-color)';
+    if (!hasState) stateEl.textContent = '';
   }
 
+  // Runs on every hass update — only the entity value lives here, and it is
+  // only re-formatted when the entity's state object or the locale changed.
   _updateHeader() {
-    if (!this._built || !this._config?.header || !this._hass) return;
+    if (!this._built || !this._hass) return;
 
-    const h = this._config.header;
-    const { subEl, stateEl } = this._els;
+    const h = this._config?.header;
+    if (!h || h.state_template || !h.state_entity) return;
 
-    if (h.subtitle_template) {
-      subEl.style.color = h.subtitle_color || 'var(--secondary-text-color)';
-    } else {
-      subEl.textContent = '';
+    const s = this._hass.states[h.state_entity];
+    const locale = this._hass.locale;
+    const c = this._stateCache;
+    if (c.valid && c.obj === s && c.locale === locale) return;
+    this._stateCache = { valid: true, obj: s, locale };
+
+    const text = s ? this._formatEntityState(h, s) : '—';
+    const { stateEl } = this._els;
+    if (stateEl.textContent !== text) stateEl.textContent = text;
+  }
+
+  _formatEntityState(h, s) {
+    const raw = String(s.state ?? '').trim();
+    // Number(), not parseFloat(): "2026-09-24T10:00" or "1.2.3" are not numbers.
+    const num = raw === '' ? NaN : Number(raw);
+
+    if (Number.isFinite(num)) {
+      const decimals = Math.min(20, Math.max(0, parseInt(h.state_decimals, 10) || 0));
+      const val = formatNumber(num, decimals, this._hass.locale);
+      const unit = h.state_unit ?? s.attributes?.unit_of_measurement ?? '';
+      return unit ? `${val} ${unit}` : val;
     }
 
-    if (!h.state_template && h.state_entity) {
-      const s = this._hass.states[h.state_entity];
-      let text;
-
-      if (s) {
-        const decimals = h.state_decimals ?? 0;
-        const num = parseFloat(s.state);
-        const val = isNaN(num) ? s.state : num.toFixed(decimals);
-        const unit = h.state_unit ?? s.attributes?.unit_of_measurement ?? '';
-        text = unit ? `${val} ${unit}` : val;
-      } else {
-        text = '—';
+    // Non-numeric: let HA translate/format it (on → An, unavailable, timestamps).
+    if (typeof this._hass.formatEntityState === 'function') {
+      try {
+        return this._hass.formatEntityState(s);
+      } catch {
+        // fall through to the raw state
       }
-
-      if (stateEl.textContent !== text) stateEl.textContent = text;
-    } else if (!h.state_template) {
-      if (stateEl.textContent !== '') stateEl.textContent = '';
     }
+    return raw;
+  }
+
+  _renderTemplateResult(el, result, useHTML) {
+    // render_template delivers parsed results: numbers, booleans, null.
+    const text = result == null ? '' : String(result).trim();
+
+    if (!useHTML || !/[<&]/.test(text)) {
+      if (el.textContent !== text || el.childElementCount) el.textContent = text;
+      return;
+    }
+    el.replaceChildren(sanitizeHtml(text));
   }
 
   _unsubscribeTpl(key) {
@@ -1351,13 +1557,14 @@ class HaGlowCard extends HTMLElement {
     try {
       const unsub = await this._hass.connection.subscribeMessage(
         msg => {
-          if (!el) return;
+          // A stale subscription can still deliver its first result before
+          // the await below resolves — never let it overwrite a newer one.
+          if (!el || this._tpl[key]?.token !== token) return;
 
           if (msg.result !== undefined) {
-            if (useHTML) el.innerHTML = msg.result.trim();
-            else el.textContent = msg.result.trim();
+            this._renderTemplateResult(el, msg.result, useHTML);
           } else if (msg.error) {
-            el.textContent = `⚠ ${msg.error.message}`;
+            el.textContent = `⚠ ${msg.error.message ?? msg.error}`;
             console.error(`ha-glow-card ${key} template:`, msg.error);
           }
         },
@@ -1376,8 +1583,10 @@ class HaGlowCard extends HTMLElement {
       }
     } catch (err) {
       console.error(`ha-glow-card: Template subscription (${key}) failed`, err);
-      if (el) el.textContent = `⚠ Template error: ${err.message}`;
-      if (this._tpl[key]?.token === token) this._tpl[key].active = null;
+      if (this._tpl[key]?.token === token) {
+        if (el) el.textContent = `⚠ Template error: ${err.message}`;
+        this._tpl[key].active = null;
+      }
     }
   }
 
@@ -1388,41 +1597,66 @@ class HaGlowCard extends HTMLElement {
    * live in deeper shadow roots and keep their chrome. A MutationObserver
    * re-injects the style for inner cards that rebuild their whole shadow root
    * on render (Lit cards keep it; some plain-DOM cards strip it each render).
+   *
+   * Cards without a shadow root are covered by the `.inner-card > * > ha-card`
+   * rule instead; we only retry a few frames for cards that attach late.
    */
-  _neutralizeInnerCard(card) {
+  _neutralizeInnerCard(card, attempt = 0) {
     const root = card.shadowRoot;
     if (!root) {
-      requestAnimationFrame(() => {
-        if (this._innerCard === card) this._neutralizeInnerCard(card);
-      });
+      if (attempt < 10) {
+        requestAnimationFrame(() => {
+          if (this._innerCard === card) this._neutralizeInnerCard(card, attempt + 1);
+        });
+      }
       return;
     }
 
-    const inject = () => {
-      if (!root.querySelector('#glow-outer-reset')) {
-        const s = document.createElement('style');
-        s.id = 'glow-outer-reset';
-        s.textContent = 'ha-card{background:transparent!important;box-shadow:none!important;border:none!important;border-radius:0!important;}';
-        root.appendChild(s);
-      }
+    this._innerRoot = root;
+    this._syncInnerStyles();
 
-      if (this._config.extra_styles && !root.querySelector('#glow-extra-styles')) {
-        const s = document.createElement('style');
-        s.id = 'glow-extra-styles';
-        s.textContent = this._config.extra_styles;
-        root.appendChild(s);
-      }
-    };
-
-    inject();
-
-    // Re-inject when the inner card replaces its shadow-root children on render.
-    // inject() is idempotent, so the mutation it triggers itself is a no-op.
-    this._innerCardObserver = new MutationObserver(inject);
+    // _syncInnerStyles() is idempotent, so the mutation it triggers itself is a no-op.
+    this._innerCardObserver = new MutationObserver(() => this._syncInnerStyles());
     this._innerCardObserver.observe(root, { childList: true });
   }
 
-  async _createInnerCard() {
+  _syncInnerStyles() {
+    const root = this._innerRoot;
+    if (!root) return;
+
+    if (!root.querySelector('#glow-outer-reset')) {
+      const s = document.createElement('style');
+      s.id = 'glow-outer-reset';
+      s.textContent = 'ha-card{background:transparent!important;box-shadow:none!important;border:none!important;border-radius:0!important;}';
+      root.appendChild(s);
+    }
+
+    const css = this._config?.extra_styles || '';
+    let extra = root.querySelector('#glow-extra-styles');
+
+    if (!css) {
+      extra?.remove();
+      return;
+    }
+
+    if (!extra) {
+      extra = document.createElement('style');
+      extra.id = 'glow-extra-styles';
+      root.appendChild(extra);
+    }
+    if (extra.textContent !== css) extra.textContent = css;
+  }
+
+  _createInnerCard() {
+    this._innerReady = this._buildInnerCard();
+    return this._innerReady;
+  }
+
+  async _buildInnerCard() {
+    // Generation guard: two setConfig() calls while loadCardHelpers() is still
+    // pending must not both append a card.
+    const gen = ++this._innerGen;
+
     const slot = this._els?.innerCard ?? this.shadowRoot.querySelector('.inner-card');
     if (!slot) return;
 
@@ -1434,11 +1668,14 @@ class HaGlowCard extends HTMLElement {
     while (slot.firstChild) slot.removeChild(slot.firstChild);
 
     this._innerCard = null;
+    this._innerRoot = null;
 
     if (!this._config?.card) return;
 
     try {
       const helpers = await _getHelpers();
+      if (gen !== this._innerGen) return;
+
       const card = helpers.createCardElement(this._config.card);
 
       if (this._hass) card.hass = this._hass;
@@ -1448,6 +1685,7 @@ class HaGlowCard extends HTMLElement {
 
       this._neutralizeInnerCard(card);
     } catch (err) {
+      if (gen !== this._innerGen) return;
       console.error('ha-glow-card: Failed to create inner card', err);
 
       const errEl = document.createElement('div');
@@ -1469,7 +1707,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c HA-GLOW-CARD %c v1.0.6',
+  '%c HA-GLOW-CARD %c v1.0.7',
   'color:#fff;background:#0381f9;font-weight:700;padding:2px 4px;border-radius:3px 0 0 3px;',
   'color:#0381f9;background:#1c1c1c;font-weight:400;padding:2px 4px;border-radius:0 3px 3px 0;border:1px solid #0381f9;'
 );

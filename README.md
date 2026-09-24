@@ -90,10 +90,11 @@ card:
 |---|---|---|---|
 | `header` | object | | Header configuration (see below). Omit the entire key to hide the header |
 | `card` | object | **required** | Any valid Lovelace card configuration |
-| `accent_color` | string | `"3, 129, 249"` | RGB values for the background glow (e.g. `"3, 129, 249"` for blue). Must be in `r, g, b` format — interpolated into `rgba()` for the gradient |
+| `accent_color` | string | `"3, 129, 249"` | Color of the background glow. Accepts an `r, g, b` triple (e.g. `"3, 129, 249"`) or any CSS color: `"#0381f9"`, `"rgb(3 129 249)"`, `"orange"`, `"var(--primary-color)"`. Invalid values fall back to the default blue |
 | `show_border` | boolean | `true` | Set to `false` to hide the tile border entirely |
 | `border_glow` | boolean | `false` | Set to `true` for an accent-colored gradient border that matches the background glow. Overrides `show_border` |
 | `inner_margin` | string | `"0 -15px -15px"` | CSS margin applied to the embedded card — use negative values to stretch it to the container edges |
+| `extra_styles` | string | | CSS injected into the shadow root of the embedded card (level 1 only), e.g. to tweak a chart without card_mod. Changes apply live in the editor preview |
 
 ### `header` options
 
@@ -105,13 +106,13 @@ card:
 | `icon_path` | string | | Path to a custom SVG file (e.g. `/local/custom_icons/plug.svg`). Rendered via CSS `mask-image` |
 | `icon_size` | number | `40` | Icon size in pixels |
 | `icon_color` | string | `var(--primary-text-color)` | CSS color for the icon |
-| `subtitle_template` | string | | Jinja2 template evaluated server-side. HTML in the result is rendered. Leave empty to hide the subtitle. Template errors are shown inline with a ⚠ prefix |
+| `subtitle_template` | string | | Jinja2 template evaluated server-side. Basic formatting HTML in the result is rendered (see [HTML in templates](#html-in-templates)). Leave empty to hide the subtitle. Template errors are shown inline with a ⚠ prefix |
 | `subtitle_color` | string | `var(--secondary-text-color)` | CSS color for the subtitle |
-| `state_entity` | string | | Entity ID for the large value on the right. Unit is read automatically from the entity |
+| `state_entity` | string | | Entity ID for the large value on the right. Unit is read automatically from the entity. Numbers follow your HA number format (e.g. `1.234,5` in German); non-numeric states are translated like in HA (`on` → `An`) |
 | `state_unit` | string | | Override the unit shown after the state value |
 | `state_decimals` | number | `0` | Number of decimal places |
 | `state_color` | string | `var(--primary-text-color)` | CSS color for the large state value |
-| `state_template` | string | | Jinja2 template for the large right value. Use either `state_entity` or `state_template`, not both |
+| `state_template` | string | | Jinja2 template for the large right value. Basic formatting HTML is rendered like in `subtitle_template`. Use either `state_entity` or `state_template`, not both |
 
 ---
 
@@ -214,6 +215,19 @@ Template errors (e.g. invalid syntax or unknown entities) are shown directly in 
 
 ---
 
+## HTML in templates
+
+`subtitle_template` and `state_template` render HTML so you can color parts of the output:
+
+```yaml
+subtitle_template: >
+  <span style="color:#4A90E2">{{ states('sensor.grid') }} W grid</span>
+```
+
+Because templates can print text from outside sources (calendar titles, media titles, …), the output is sanitized before it is shown. Allowed: `span`, `div`, `p`, `b`, `strong`, `i`, `em`, `u`, `s`, `small`, `big`, `sub`, `sup`, `br`, `font`, `mark`, `code`, `ha-icon`, `img` with the attributes `style`, `class`, `title`, `color`, `icon`, `src` (http(s) or `/local/…`), `alt`, `width`, `height`. Scripts, event handlers (`onclick`, `onerror`, …), frames and forms are removed; other tags such as `<a>` are reduced to their text.
+
+---
+
 ## Visual editor
 
 The card includes a full visual editor accessible via the HA dashboard editor.
@@ -270,6 +284,26 @@ accent_color: "150, 150, 150"
 ---
 
 ## Changelog
+
+### v1.0.7
+- **Fix** — Changing or removing `extra_styles` now applies immediately; previously the old CSS stayed until the embedded card was rebuilt
+- **Fix** — `state_entity` values: timestamps and version strings are no longer cut to their leading number (`2026-…` → `2026`); numbers use your HA number format (`1.234,5`); non-numeric states are translated (`on` → `An`, `unavailable` → `Nicht verfügbar`)
+- **Fix** — Template results that are plain numbers, booleans or empty (`{{ 42 }}`) no longer break the subtitle / value
+- **Fix** — Masonry view: `getCardSize()` returned `"[object Promise]1"` when the embedded card reports its size asynchronously (e.g. `vertical-stack`)
+- **Fix** — Embedded cards without a shadow root no longer trigger an endless `requestAnimationFrame` loop; their card frame is now neutralized as well
+- **Fix** — No duplicate embedded card when the config changes twice while Home Assistant's card helpers are still loading
+- **Fix** — A superseded template subscription can no longer overwrite the result of the current one
+- **Security** — HTML from templates is sanitized (see [HTML in templates](#html-in-templates)); icon paths and custom card names are no longer passed through the HTML parser
+- **Improvement** — `accent_color` accepts any CSS color (hex, `rgb()`, `hsl()`, names, `var(--…)`); existing `r, g, b` values render exactly as before
+- **Improvement** — The value column sizes to its content, so long values no longer overlap the title
+- **Improvement** — Sections view: implements `getGridOptions()` (HA 2024.11+); `getLayoutOptions()` kept for older versions
+- **Improvement** — SVG icon paths with spaces or quotes work
+- **Improvement** — Editor: subtitle mode stays on "Jinja2 template" until a template is entered; unitless margins (`10`) become `10px`; color swatches understand `#abc` and `rgb()`
+
+### v1.0.6
+- **Fix** — Only the directly embedded card (level 1) loses its frame; cards nested inside an embedded stack keep theirs (supersedes v1.0.5)
+- **Fix** — Templates keep updating after the card is moved in the DOM; race condition on fast template changes
+
 
 ### v1.0.4
 - **Fix** — Editor no longer scrolls back to the top when a setting is changed. The left panel now preserves scroll position while the preview updates independently.
