@@ -38,6 +38,16 @@ A custom Home Assistant Lovelace card that wraps any other card (event stacks) i
 
 > **Cache:** Increment the version parameter on every update (e.g. `?v=0.2.1`) to bypass the browser cache.
 
+### HACS — installing a pre-release
+
+Pre-release versions (e.g. `v1.0.7`) are ahead of the recommended "Latest" release and meant for testing, not everyday use. HACS hides them by default:
+
+1. Open **HACS → Glow Card → ⋮ → Redownload**
+2. Enable **"Show beta versions"**
+3. Pick the pre-release version from the dropdown and confirm
+
+Switch back to the "Latest" version the same way once you're done testing.
+
 ---
 
 ## Configuration
@@ -285,7 +295,7 @@ accent_color: "150, 150, 150"
 
 ## Changelog
 
-### v1.0.7
+### v1.0.7 — Pre-release (testing)
 - **Fix** — Changing or removing `extra_styles` now applies immediately; previously the old CSS stayed until the embedded card was rebuilt
 - **Fix** — `state_entity` values: timestamps and version strings are no longer cut to their leading number (`2026-…` → `2026`); numbers use your HA number format (`1.234,5`); non-numeric states are translated (`on` → `An`, `unavailable` → `Nicht verfügbar`)
 - **Fix** — Template results that are plain numbers, booleans or empty (`{{ 42 }}`) no longer break the subtitle / value
