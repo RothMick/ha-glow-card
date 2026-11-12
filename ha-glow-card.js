@@ -1,9 +1,10 @@
 /**
- * ha-glow-card v1.0.7
+ * ha-glow-card v1.0.8
  * Editor rebuilt closer to energy-flow-card style:
  * - all inputs via ha-form
  * - fewer direct ha-textfield / picker elements
- * - text changes are buffered so iOS/WebKit does not re-render on every keystroke
+ * - every change is reported right away; the editor recognises its own
+ *   config coming back from Home Assistant and does not re-render for it
  */
 
 const DEFAULT_ACCENT = '3, 129, 249';
@@ -26,8 +27,9 @@ class HaGlowCardEditor extends HTMLElement {
     this._iconModeOverride = null;
     this._stateModeOverride = null;
     this._subModeOverride = null;
-    this._mainEditing = false;
-    this._pending = null;
+    this._rendered = false;
+    this._json = null;
+    this._echoes = [];
   }
 
   set hass(hass) {
@@ -42,8 +44,26 @@ class HaGlowCardEditor extends HTMLElement {
   }
 
   setConfig(config) {
+    const json = JSON.stringify(config || {});
+
+    // Home Assistant hands our own config-changed events back, and it does so
+    // asynchronously (hui-element-editor awaits before calling setConfig), so
+    // several can be under way at once. The DOM already shows that state:
+    // rebuilding it would destroy the field the user has just moved to.
+    if (this._rendered) {
+      const echo = this._echoes.indexOf(json);
+      if (echo !== -1) {
+        this._echoes.splice(0, echo + 1);
+        return;
+      }
+      if (json === this._json) return;
+    }
+
+    // A config from outside: YAML editor, layout tab, another card.
+    this._echoes = [];
     const prevCardType = this._config.card?.type;
-    this._config = JSON.parse(JSON.stringify(config || {}));
+    this._config = JSON.parse(json);
+    this._json = json;
 
     const h = this._config.header || {};
     if (h.icon || h.icon_path) this._iconModeOverride = null;
@@ -59,15 +79,27 @@ class HaGlowCardEditor extends HTMLElement {
       return;
     }
 
-    if (!this._mainEditing) {
-      this._cardEditor = null;
-      const scroller = this._findScroller();
-      const savedScroll = scroller ? scroller.scrollTop : null;
-      this._render();
-      if (scroller != null && savedScroll != null) {
-        requestAnimationFrame(() => { scroller.scrollTop = savedScroll; });
-      }
+    this._rerender();
+  }
+
+  // Full rebuild, keeping the scroll position of the dialog. Reserved for
+  // configs from outside and for the mode selectors (see _rerenderSoon);
+  // every other change leaves the DOM alone.
+  _rerender() {
+    this._cardEditor = null;
+    const scroller = this._findScroller();
+    const savedScroll = scroller ? scroller.scrollTop : null;
+    this._render();
+    if (scroller != null && savedScroll != null) {
+      requestAnimationFrame(() => { scroller.scrollTop = savedScroll; });
     }
+  }
+
+  // The mode selectors show and hide whole groups of fields and clear the
+  // values of the groups they hide, so the forms are rebuilt from the new
+  // config - once the selector has finished dispatching its event.
+  _rerenderSoon() {
+    queueMicrotask(() => this._rerender());
   }
 
   _findScroller() {
@@ -81,57 +113,23 @@ class HaGlowCardEditor extends HTMLElement {
     return null;
   }
 
-  disconnectedCallback() {
-    this._flushPending();
-  }
-
   _fire(cfg = this._config) {
-    this._config = JSON.parse(JSON.stringify(cfg));
+    const json = JSON.stringify(cfg);
+    if (json === this._json) return;
+
+    this._config = JSON.parse(json);
+    this._json = json;
+    this._echoes.push(json);
+
+    // HA deep-freezes the config it receives, so it gets a copy of its own.
     this.dispatchEvent(new CustomEvent('config-changed', {
-      detail: { config: this._config },
+      detail: { config: JSON.parse(json) },
       bubbles: true,
       composed: true,
     }));
   }
 
-  _flushPending() {
-    if (!this._pending) return;
-    const cfg = this._pending;
-    this._pending = null;
-    this._mainEditing = true;
-    this._fire(cfg);
-    this._mainEditing = false;
-  }
-
-  _set(path, value, flush = true) {
-    const cfg = JSON.parse(JSON.stringify(this._config));
-    const parts = path.split('.');
-    let obj = cfg;
-
-    for (let i = 0; i < parts.length - 1; i++) {
-      if (obj[parts[i]] == null) obj[parts[i]] = {};
-      obj = obj[parts[i]];
-    }
-
-    const key = parts[parts.length - 1];
-
-    if (value === '' || value === null || value === undefined) {
-      delete obj[key];
-    } else {
-      obj[key] = value;
-    }
-
-    if (flush) {
-      this._mainEditing = true;
-      this._fire(cfg);
-      this._mainEditing = false;
-    } else {
-      this._config = cfg;
-      this._pending = cfg;
-    }
-  }
-
-  _mergeHeader(values, flush = false) {
+  _mergeHeader(values) {
     const cfg = JSON.parse(JSON.stringify(this._config));
     cfg.header = { ...(cfg.header || {}), ...values };
 
@@ -141,17 +139,10 @@ class HaGlowCardEditor extends HTMLElement {
       }
     });
 
-    if (flush) {
-      this._mainEditing = true;
-      this._fire(cfg);
-      this._mainEditing = false;
-    } else {
-      this._config = cfg;
-      this._pending = cfg;
-    }
+    this._fire(cfg);
   }
 
-  _mergeRoot(values, flush = false) {
+  _mergeRoot(values) {
     const cfg = JSON.parse(JSON.stringify(this._config));
 
     Object.entries(values).forEach(([k, v]) => {
@@ -159,14 +150,7 @@ class HaGlowCardEditor extends HTMLElement {
       else cfg[k] = v;
     });
 
-    if (flush) {
-      this._mainEditing = true;
-      this._fire(cfg);
-      this._mainEditing = false;
-    } else {
-      this._config = cfg;
-      this._pending = cfg;
-    }
+    this._fire(cfg);
   }
 
   _iconMode() {
@@ -244,7 +228,7 @@ class HaGlowCardEditor extends HTMLElement {
   }
 
   _render() {
-    const h = this._config.header || {};
+    this._rendered = true;
     const iconMode = this._iconMode();
     const subMode = this._subtitleMode();
     const stateMode = this._stateMode();
@@ -303,7 +287,7 @@ class HaGlowCardEditor extends HTMLElement {
 
         <div class="section">Tile Settings</div>
         <div class="field">
-          ${this._colorFieldHtml('accent_color', 'Glow color', '#0381f9', true)}
+          ${this._colorFieldHtml('accent_color', 'Glow color', '#0381f9')}
           <div class="hint">Any CSS color: #hex, r, g, b, rgb(), hsl(), names or var(--…).</div>
         </div>
         <ha-form id="form-margin"></ha-form>
@@ -471,7 +455,7 @@ class HaGlowCardEditor extends HTMLElement {
     `;
   }
 
-  _colorFieldHtml(id, label, placeholder = '', isRgb = false) {
+  _colorFieldHtml(id, label, placeholder = '') {
     return `
       <div class="color-field">
         <div class="color-swatch no-color" id="${id}-swatch" title="Pick color">
@@ -491,8 +475,7 @@ class HaGlowCardEditor extends HTMLElement {
     this._setupForm('form-title',
       [{ name:'title', label:'Title *', selector:{ text:{} } }],
       { title:h.title || '' },
-      v => this._mergeHeader(v, false),
-      true
+      v => this._mergeHeader(v)
     );
 
     this._setupForm('form-sub-mode',
@@ -504,11 +487,9 @@ class HaGlowCardEditor extends HTMLElement {
       v => {
         const mode = v.sub_mode;
         this._subModeOverride = mode === 'none' ? null : mode;
-        this._el('sub-tpl-wrap')?.classList.toggle('hidden', mode !== 'template');
-        this._el('sub-color-wrap')?.classList.toggle('hidden', mode !== 'template');
-        if (mode !== 'template') this._mergeHeader({ subtitle_template:null, subtitle_color:null }, true);
-      },
-      false
+        if (mode !== 'template') this._mergeHeader({ subtitle_template:null, subtitle_color:null });
+        this._rerenderSoon();
+      }
     );
 
     this._setupForm('form-icon-mode',
@@ -521,9 +502,6 @@ class HaGlowCardEditor extends HTMLElement {
       v => {
         const mode = v.icon_mode;
         this._iconModeOverride = mode === 'none' ? null : mode;
-        this._el('icon-mdi-wrap')?.classList.toggle('hidden', mode !== 'mdi');
-        this._el('icon-svg-wrap')?.classList.toggle('hidden', mode !== 'svg');
-        this._el('icon-extras')?.classList.toggle('hidden', mode === 'none');
 
         const patch = {};
         if (mode !== 'mdi') patch.icon = null;
@@ -533,30 +511,27 @@ class HaGlowCardEditor extends HTMLElement {
           patch.icon_path = null;
           patch.icon_color = null;
         }
-        this._mergeHeader(patch, true);
-      },
-      false
+        this._mergeHeader(patch);
+        this._rerenderSoon();
+      }
     );
 
     this._setupForm('form-icon-mdi',
       [{ name:'icon', label:'Icon', selector:{ icon:{} }, context:{ icon_entity:'entity' } }],
       { icon:h.icon || '' },
-      v => this._mergeHeader(v, false),
-      true
+      v => this._mergeHeader(v)
     );
 
     this._setupForm('form-icon-svg',
       [{ name:'icon_path', label:'Path, e.g. /local/custom_icons/icon.svg', selector:{ text:{} } }],
       { icon_path:h.icon_path || '' },
-      v => this._mergeHeader(v, false),
-      true
+      v => this._mergeHeader(v)
     );
 
     this._setupForm('form-icon-extra',
       [{ name:'icon_size', label:'Size px', selector:{ number:{ min:16, max:96, mode:'box' } } }],
       { icon_size:h.icon_size ?? 40 },
-      v => this._mergeHeader({ icon_size:parseInt(v.icon_size, 10) || 40 }, false),
-      true
+      v => this._mergeHeader({ icon_size:parseInt(v.icon_size, 10) || 40 })
     );
 
     this._setupForm('form-state-mode',
@@ -569,9 +544,6 @@ class HaGlowCardEditor extends HTMLElement {
       v => {
         const mode = v.state_mode;
         this._stateModeOverride = mode === 'none' ? null : mode;
-        this._el('state-entity-wrap')?.classList.toggle('hidden', mode !== 'entity');
-        this._el('state-tpl-wrap')?.classList.toggle('hidden', mode !== 'template');
-        this._el('state-color-wrap')?.classList.toggle('hidden', mode === 'none');
 
         const patch = {};
         if (mode !== 'entity') {
@@ -581,16 +553,15 @@ class HaGlowCardEditor extends HTMLElement {
         }
         if (mode !== 'template') patch.state_template = null;
         if (mode === 'none') patch.state_color = null;
-        this._mergeHeader(patch, true);
-      },
-      false
+        this._mergeHeader(patch);
+        this._rerenderSoon();
+      }
     );
 
     this._setupForm('form-state-entity',
       [{ name:'state_entity', label:'Entity', selector:{ entity:{} } }],
       { state_entity:h.state_entity || '' },
-      v => this._mergeHeader({ state_entity:v.state_entity || null }, true),
-      false
+      v => this._mergeHeader({ state_entity:v.state_entity || null })
     );
 
     this._setupForm('form-state-extra',
@@ -605,8 +576,7 @@ class HaGlowCardEditor extends HTMLElement {
       v => this._mergeHeader({
         state_unit:v.state_unit || null,
         state_decimals:parseInt(v.state_decimals, 10) || 0,
-      }, false),
-      true
+      })
     );
 
     this._setupForm('form-margin',
@@ -622,8 +592,7 @@ class HaGlowCardEditor extends HTMLElement {
         margin_bottom:margin.b,
         margin_left:margin.l,
       },
-      v => this._mergeRoot({ inner_margin:this._composeMarginFromForm(v) }, false),
-      true
+      v => this._mergeRoot({ inner_margin:this._composeMarginFromForm(v) })
     );
 
     this._setupForm('form-border',
@@ -634,21 +603,20 @@ class HaGlowCardEditor extends HTMLElement {
       ] } } }],
       { border:cfg.show_border === false ? 'hide' : cfg.border_glow === true ? 'glow' : 'show' },
       v => {
-        if (v.border === 'hide') this._mergeRoot({ show_border:false, border_glow:null }, true);
-        else if (v.border === 'glow') this._mergeRoot({ show_border:null, border_glow:true }, true);
-        else this._mergeRoot({ show_border:null, border_glow:null }, true);
-      },
-      false
+        if (v.border === 'hide') this._mergeRoot({ show_border:false, border_glow:null });
+        else if (v.border === 'glow') this._mergeRoot({ show_border:null, border_glow:true });
+        else this._mergeRoot({ show_border:null, border_glow:null });
+      }
     );
 
-    this._setupColorForm('title_color', h.title_color || '', false, val => this._mergeHeader({ title_color:val }, false), 'Title color');
-    this._setupColorForm('subtitle_color', h.subtitle_color || '', false, val => this._mergeHeader({ subtitle_color:val }, false), 'Subtitle color');
-    this._setupColorForm('icon_color', h.icon_color || '', false, val => this._mergeHeader({ icon_color:val }, false), 'Icon color');
-    this._setupColorForm('state_color', h.state_color || '', false, val => this._mergeHeader({ state_color:val }, false), 'Value color');
-    this._setupColorForm('accent_color', cfg.accent_color || DEFAULT_ACCENT, true, val => this._mergeRoot({ accent_color:val }, false), 'Glow color');
+    this._setupColorForm('title_color', h.title_color || '', false, val => this._mergeHeader({ title_color:val }), 'Title color');
+    this._setupColorForm('subtitle_color', h.subtitle_color || '', false, val => this._mergeHeader({ subtitle_color:val }), 'Subtitle color');
+    this._setupColorForm('icon_color', h.icon_color || '', false, val => this._mergeHeader({ icon_color:val }), 'Icon color');
+    this._setupColorForm('state_color', h.state_color || '', false, val => this._mergeHeader({ state_color:val }), 'Value color');
+    this._setupColorForm('accent_color', cfg.accent_color || DEFAULT_ACCENT, true, val => this._mergeRoot({ accent_color:val }), 'Glow color');
   }
 
-  _setupForm(id, schema, data, onChange, buffered = true) {
+  _setupForm(id, schema, data, onChange) {
     const form = this._el(id);
     if (!form) return;
 
@@ -657,18 +625,15 @@ class HaGlowCardEditor extends HTMLElement {
     form.data = data;
     form.computeLabel = s => s.label ?? s.name;
 
+    // Every change is reported right away: a tap on "Save" does not reliably
+    // blur the field first (iOS), so nothing may wait for focusout. The form
+    // is not re-rendered for it and keeps its focus; ha-form versions that do
+    // not track their own data get it handed back.
     form.addEventListener('value-changed', ev => {
-      onChange(ev.detail.value || {});
-      if (!buffered) this._flushPending();
+      const value = ev.detail.value || {};
+      form.data = value;
+      onChange(value);
     });
-
-    if (buffered) {
-      form.addEventListener('focusout', () => {
-        setTimeout(() => {
-          if (this._pending && this.shadowRoot.activeElement !== form) this._flushPending();
-        }, 0);
-      });
-    }
   }
 
   _setupColorForm(id, value, isRgb, onChange, label) {
@@ -684,14 +649,11 @@ class HaGlowCardEditor extends HTMLElement {
     form.computeLabel = s => s.label ?? s.name;
 
     form.addEventListener('value-changed', ev => {
+      form.data = ev.detail.value || {};
       const raw = ev.detail.value?.[id] || '';
       const store = isRgb ? (this._toRgb(raw) || raw) : raw;
       onChange(store);
       this._syncColorPicker(id, raw);
-    });
-
-    form.addEventListener('focusout', () => {
-      setTimeout(() => this._flushPending(), 0);
     });
   }
 
@@ -719,16 +681,16 @@ class HaGlowCardEditor extends HTMLElement {
 
   _wireNativeFields() {
     const sub = this._el('subtitle_template');
-    sub?.addEventListener('change', e => this._mergeHeader({ subtitle_template:e.target.value }, true));
+    sub?.addEventListener('input', e => this._mergeHeader({ subtitle_template:e.target.value }));
 
     const state = this._el('state_template');
-    state?.addEventListener('change', e => this._mergeHeader({ state_template:e.target.value }, true));
+    state?.addEventListener('input', e => this._mergeHeader({ state_template:e.target.value }));
 
-    this._wireColorPicker('title_color', false, val => this._mergeHeader({ title_color:val }, true));
-    this._wireColorPicker('subtitle_color', false, val => this._mergeHeader({ subtitle_color:val }, true));
-    this._wireColorPicker('icon_color', false, val => this._mergeHeader({ icon_color:val }, true));
-    this._wireColorPicker('state_color', false, val => this._mergeHeader({ state_color:val }, true));
-    this._wireColorPicker('accent_color', true, val => this._mergeRoot({ accent_color:val }, true));
+    this._wireColorPicker('title_color', false, val => this._mergeHeader({ title_color:val }));
+    this._wireColorPicker('subtitle_color', false, val => this._mergeHeader({ subtitle_color:val }));
+    this._wireColorPicker('icon_color', false, val => this._mergeHeader({ icon_color:val }));
+    this._wireColorPicker('state_color', false, val => this._mergeHeader({ state_color:val }));
+    this._wireColorPicker('accent_color', true, val => this._mergeRoot({ accent_color:val }));
   }
 
   _updateColorSwatch(id, hex) {
@@ -778,7 +740,6 @@ class HaGlowCardEditor extends HTMLElement {
   }
 
   _switchTab(tab) {
-    this._flushPending();
     this._activeTab = tab;
     this._el('panel-container')?.classList.toggle('hidden', tab !== 'container');
     this._el('panel-embedded')?.classList.toggle('hidden', tab !== 'embedded');
@@ -953,7 +914,11 @@ class HaGlowCardEditor extends HTMLElement {
   }
 }
 
-customElements.define('ha-glow-card-editor', HaGlowCardEditor);
+// Guarded: the same file registered under two resource URLs must not abort on
+// "name has already been used" - the copy that loaded first stays in charge.
+if (!customElements.get('ha-glow-card-editor')) {
+  customElements.define('ha-glow-card-editor', HaGlowCardEditor);
+}
 
 
 // ─── Card ────────────────────────────────────────────────────────────────────
@@ -1002,6 +967,11 @@ const sanitizeHtml = html => {
         const badSrc = n === 'src' && !/^(https?:\/\/|\/(?!\/))/i.test(value.trim());
         if (!HTML_ALLOWED_ATTRS.has(n) || badSrc) node.removeAttribute(name);
       }
+
+      // position:fixed is the one inline style that escapes the tile's
+      // overflow clip - it could be used to cover the whole dashboard.
+      const pos = node.style?.position;
+      if (pos && !/^(static|relative|absolute|sticky)$/i.test(pos)) node.style.removeProperty('position');
     }
   };
 
@@ -1020,6 +990,7 @@ const formatNumber = (num, decimals, locale) => {
     fmt === 'comma_decimal' ? ['en-US', 'en'] :
     fmt === 'decimal_comma' ? ['de', 'es', 'it'] :
     fmt === 'space_comma' ? ['fr', 'sv', 'cs'] :
+    fmt === 'quote_decimal' ? ['de-CH'] :
     fmt === 'system' ? undefined :
     locale?.language;
 
@@ -1071,11 +1042,17 @@ class HaGlowCard extends HTMLElement {
   }
 
   connectedCallback() {
-    // Re-subscribe templates after the card is moved in the DOM (HA relayout,
-    // drag, tab switch). disconnectedCallback tore the subscriptions down and
-    // `set hass` only subscribes on the first hass, so without this the
-    // subtitle/state templates would stay frozen after a reconnect.
-    if (this._built && this._hass && this._config?.header) {
+    if (!this._built) return;
+
+    // A Lit card only gets its shadow root once it is connected. If we were
+    // attached late (visibility condition, conditional card, popup), nothing
+    // could be injected at the time the inner card was built.
+    if (this._innerCard && !this._innerRoot) this._neutralizeInnerCard(this._innerCard);
+
+    // Templates are only subscribed while the card is in the DOM (see
+    // _subscribeTpl): this is where they start, and where they resume after
+    // disconnectedCallback tore them down (HA relayout, drag, tab switch).
+    if (this._hass && this._config?.header) {
       this._subscribeTpl('subtitle', this._config.header.subtitle_template, this._els.subEl, true);
       this._subscribeTpl('state', this._config.header.state_template, this._els.stateEl, true);
     }
@@ -1219,10 +1196,11 @@ class HaGlowCard extends HTMLElement {
         }
 
         /* The value column sizes to its content, so long values ("12.345 kWh")
-           push the title instead of overflowing into it. */
+           push the title instead of overflowing into it. The icon column is
+           65px wide and only grows for icons that would not fit with a gap. */
         .header.has-icon {
           grid-template-areas:"icon title state";
-          grid-template-columns:65px minmax(0, 1fr) auto;
+          grid-template-columns:minmax(65px, auto) minmax(0, 1fr) auto;
         }
 
         .header.no-icon {
@@ -1232,7 +1210,7 @@ class HaGlowCard extends HTMLElement {
 
         .header.has-icon.no-state {
           grid-template-areas:"icon title";
-          grid-template-columns:65px minmax(0, 1fr);
+          grid-template-columns:minmax(65px, auto) minmax(0, 1fr);
         }
 
         .header.no-icon.no-state {
@@ -1245,6 +1223,7 @@ class HaGlowCard extends HTMLElement {
           display:flex;
           align-items:center;
           justify-content:flex-start;
+          padding-right:12px;
         }
 
         .icon-mask {
@@ -1546,7 +1525,10 @@ class HaGlowCard extends HTMLElement {
 
     this._unsubscribeTpl(key);
 
-    if (!this._hass?.connection) return;
+    // Not in the DOM: if the card were dropped without ever being attached,
+    // no disconnectedCallback would end the subscription. connectedCallback
+    // subscribes as soon as we are.
+    if (!this._hass?.connection || !this.isConnected) return;
 
     // Token identifies this subscribe attempt. If the slot's token changes
     // while we await (rapid template switch, or a disconnect), the resolved
@@ -1599,18 +1581,23 @@ class HaGlowCard extends HTMLElement {
    * on render (Lit cards keep it; some plain-DOM cards strip it each render).
    *
    * Cards without a shadow root are covered by the `.inner-card > * > ha-card`
-   * rule instead; we only retry a few frames for cards that attach late.
+   * rule instead. A Lit card has no shadow root until it is connected, so we
+   * retry for a few frames, and only while we are in the DOM ourselves.
    */
   _neutralizeInnerCard(card, attempt = 0) {
     const root = card.shadowRoot;
     if (!root) {
-      if (attempt < 10) {
+      // No polling while we are detached: connectedCallback calls us again.
+      if (this.isConnected && attempt < 10) {
         requestAnimationFrame(() => {
           if (this._innerCard === card) this._neutralizeInnerCard(card, attempt + 1);
         });
       }
       return;
     }
+
+    // Two retry chains can overlap (inner card built while we are being attached).
+    if (this._innerRoot === root) return;
 
     this._innerRoot = root;
     this._syncInnerStyles();
@@ -1696,18 +1683,22 @@ class HaGlowCard extends HTMLElement {
   }
 }
 
-customElements.define('ha-glow-card', HaGlowCard);
+if (!customElements.get('ha-glow-card')) {
+  customElements.define('ha-glow-card', HaGlowCard);
+}
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: 'ha-glow-card',
-  name: 'Glow Card',
-  description: 'Styled tile container with glow/gradient background, header, icon, subtitle, and embedded card',
-  preview: true,
-});
+if (!window.customCards.some(c => c.type === 'ha-glow-card')) {
+  window.customCards.push({
+    type: 'ha-glow-card',
+    name: 'Glow Card',
+    description: 'Styled tile container with glow/gradient background, header, icon, subtitle, and embedded card',
+    preview: true,
+  });
+}
 
 console.info(
-  '%c HA-GLOW-CARD %c v1.0.7',
+  '%c HA-GLOW-CARD %c v1.0.8',
   'color:#fff;background:#0381f9;font-weight:700;padding:2px 4px;border-radius:3px 0 0 3px;',
   'color:#0381f9;background:#1c1c1c;font-weight:400;padding:2px 4px;border-radius:0 3px 3px 0;border:1px solid #0381f9;'
 );

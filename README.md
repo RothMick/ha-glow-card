@@ -1,6 +1,6 @@
 # Glow Card
 
-A custom Home Assistant Lovelace card that wraps any other card (event stacks) in a styled tile container with a configurable header. No external dependencies — no card-mod, no button-card required.
+A custom Home Assistant Lovelace card that wraps any other card (even stacks) in a styled tile container with a configurable header. No external dependencies — no card-mod, no button-card required.
 
 <img width="511" height="283" alt="example_1 1" src="https://github.com/user-attachments/assets/1d003000-ba9a-4c45-9931-6940a5042f36" />
 <img width="511" height="379" alt="example_2 1" src="https://github.com/user-attachments/assets/2ab3bf22-d695-4dd5-a334-237d86ad6ffb" />
@@ -36,11 +36,11 @@ A custom Home Assistant Lovelace card that wraps any other card (event stacks) i
 
 > **Note:** Advanced mode must be enabled in your HA profile settings to access the Resources menu.
 
-> **Cache:** Increment the version parameter on every update (e.g. `?v=0.2.1`) to bypass the browser cache.
+> **Cache:** Increment the version parameter on every update (e.g. `?v=1.0.1`) to bypass the browser cache.
 
 ### HACS — installing a pre-release
 
-Pre-release versions (e.g. `v1.0.7`) are ahead of the recommended "Latest" release and meant for testing, not everyday use. HACS hides them by default:
+Pre-release versions are ahead of the recommended "Latest" release and meant for testing, not everyday use. HACS hides them by default:
 
 1. Open **HACS → Glow Card → ⋮ → Redownload**
 2. Enable **"Show beta versions"**
@@ -234,7 +234,7 @@ subtitle_template: >
   <span style="color:#4A90E2">{{ states('sensor.grid') }} W grid</span>
 ```
 
-Because templates can print text from outside sources (calendar titles, media titles, …), the output is sanitized before it is shown. Allowed: `span`, `div`, `p`, `b`, `strong`, `i`, `em`, `u`, `s`, `small`, `big`, `sub`, `sup`, `br`, `font`, `mark`, `code`, `ha-icon`, `img` with the attributes `style`, `class`, `title`, `color`, `icon`, `src` (http(s) or `/local/…`), `alt`, `width`, `height`. Scripts, event handlers (`onclick`, `onerror`, …), frames and forms are removed; other tags such as `<a>` are reduced to their text.
+Because templates can print text from outside sources (calendar titles, media titles, …), the output is sanitized before it is shown. Allowed: `span`, `div`, `p`, `b`, `strong`, `i`, `em`, `u`, `s`, `small`, `big`, `sub`, `sup`, `br`, `font`, `mark`, `code`, `ha-icon`, `img` with the attributes `style`, `class`, `title`, `color`, `icon`, `src` (http(s) or `/local/…`), `alt`, `width`, `height`. Scripts, event handlers (`onclick`, `onerror`, …), frames and forms are removed; other tags such as `<a>` are reduced to their text. `position: fixed` is dropped from inline styles, so the output cannot leave its tile.
 
 ---
 
@@ -295,7 +295,18 @@ accent_color: "150, 150, 150"
 
 ## Changelog
 
-### v1.0.7 — Pre-release (testing)
+### v1.0.8
+- **Fix** — Editor: changing a setting no longer rebuilds the whole form. Previously the field or dropdown you had just moved to was thrown away after every change, and the native color picker lost its element on the first color step
+- **Fix** — Editor: changes are saved as you type. Typing a value and pressing "Save" without leaving the field first (typical on iOS) no longer saves the old value
+- **Fix** — Editor: a text change could undo a color picked right after it
+- **Fix** — Cards that are attached late — behind a `visibility` condition, inside a `conditional` card or a popup — now strip the embedded card's frame and apply `extra_styles` like every other card
+- **Fix** — Templates are only subscribed while the card is on screen; a card that is created but never shown no longer keeps a subscription open
+- **Fix** — Icons larger than 53 px no longer run into the title: the icon column grows with the icon. Up to 53 px the layout is unchanged
+- **Fix** — The number format `1'234.5` is honoured for `state_entity` values
+- **Security** — `position: fixed` is removed from inline styles in template HTML, so text from outside sources cannot cover the dashboard
+- **Improvement** — Registering the file under two resource URLs no longer throws
+
+### v1.0.7
 - **Fix** — Changing or removing `extra_styles` now applies immediately; previously the old CSS stayed until the embedded card was rebuilt
 - **Fix** — `state_entity` values: timestamps and version strings are no longer cut to their leading number (`2026-…` → `2026`); numbers use your HA number format (`1.234,5`); non-numeric states are translated (`on` → `An`, `unavailable` → `Nicht verfügbar`)
 - **Fix** — Template results that are plain numbers, booleans or empty (`{{ 42 }}`) no longer break the subtitle / value
